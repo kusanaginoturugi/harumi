@@ -19,7 +19,7 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -U pip
 pip install -e .
-pip install -U "markitdown[all]"
+pip install -U "markitdown[pdf,docx,pptx,xlsx,xls]"
 harumi init
 harumi roots add ~/Documents
 harumi scan
@@ -104,12 +104,20 @@ harumi find "旅行フォルダはどこ"
 harumi status
 ```
 
+言語や要約方針を変えたあとに summary を作り直したいときは、危険コマンドを明示実行します。
+
+```bash
+harumi regenerate-summaries --scope all --execute --confirm RESET-SUMMARIES
+```
+
 ## 環境変数
 
 - `HARUMI_HOME`
   - ローカル保存先を上書きする
 - `HARUMI_SUMMARY_MODEL`
   - Ollama の summary モデル名
+- `HARUMI_SUMMARY_LANGUAGE`
+  - 要約の出力言語。既定値は `ja`
 - `HARUMI_EMBED_MODEL`
   - Ollama の embedding モデル名
 - `HARUMI_ENABLE_SUMMARY`
@@ -127,6 +135,7 @@ harumi status
 
 ```bash
 HARUMI_SUMMARY_MODEL=gemma3:latest \
+HARUMI_SUMMARY_LANGUAGE=ja \
 HARUMI_EMBED_MODEL=embeddinggemma \
 harumi scan
 ```

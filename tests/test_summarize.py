@@ -3,7 +3,12 @@ from __future__ import annotations
 import os
 import unittest
 
-from harumi.summarize import should_summarize_folder, should_summarize_text
+from harumi.summarize import (
+    build_folder_summary_prompt,
+    build_summary_prompt,
+    should_summarize_folder,
+    should_summarize_text,
+)
 
 
 class SummarizePolicyTests(unittest.TestCase):
@@ -76,6 +81,28 @@ class SummarizePolicyTests(unittest.TestCase):
                 "file: note.txt (.txt)\nfile: policy.pdf (.pdf)"
             )
         )
+
+    def test_summary_prompt_defaults_to_japanese(self) -> None:
+        old_value = os.environ.get("HARUMI_SUMMARY_LANGUAGE")
+        os.environ.pop("HARUMI_SUMMARY_LANGUAGE", None)
+        try:
+            prompt = build_summary_prompt("/tmp/report.txt", "A" * 50)
+            self.assertIn("必ず日本語で回答してください", prompt)
+        finally:
+            if old_value is not None:
+                os.environ["HARUMI_SUMMARY_LANGUAGE"] = old_value
+
+    def test_folder_prompt_can_switch_to_english(self) -> None:
+        old_value = os.environ.get("HARUMI_SUMMARY_LANGUAGE")
+        os.environ["HARUMI_SUMMARY_LANGUAGE"] = "en"
+        try:
+            prompt = build_folder_summary_prompt("/tmp/docs", "file: note.txt (.txt)")
+            self.assertIn("Respond in English.", prompt)
+        finally:
+            if old_value is None:
+                os.environ.pop("HARUMI_SUMMARY_LANGUAGE", None)
+            else:
+                os.environ["HARUMI_SUMMARY_LANGUAGE"] = old_value
 
 
 if __name__ == "__main__":

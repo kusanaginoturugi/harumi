@@ -573,6 +573,97 @@ def count_index_stats(db_path: Path) -> dict[str, int]:
         }
 
 
+def count_regeneration_targets(db_path: Path, scope: str) -> dict[str, int]:
+    with connect(db_path) as connection:
+        counts = {
+            "file_documents": 0,
+            "folder_records": 0,
+            "file_summaries": 0,
+            "folder_summaries": 0,
+            "file_embeddings": 0,
+            "folder_embeddings": 0,
+        }
+        if scope in {"all", "files"}:
+            counts["file_documents"] = int(
+                connection.execute("SELECT COUNT(*) AS count FROM documents").fetchone()["count"]
+            )
+            counts["file_summaries"] = int(
+                connection.execute("SELECT COUNT(*) AS count FROM summaries").fetchone()["count"]
+            )
+            counts["file_embeddings"] = int(
+                connection.execute("SELECT COUNT(*) AS count FROM embeddings").fetchone()["count"]
+            )
+        if scope in {"all", "folders"}:
+            counts["folder_records"] = int(
+                connection.execute("SELECT COUNT(*) AS count FROM folders").fetchone()["count"]
+            )
+            counts["folder_summaries"] = int(
+                connection.execute("SELECT COUNT(*) AS count FROM folder_summaries").fetchone()["count"]
+            )
+            counts["folder_embeddings"] = int(
+                connection.execute("SELECT COUNT(*) AS count FROM folder_embeddings").fetchone()["count"]
+            )
+        return counts
+
+
+def purge_summary_artifacts(db_path: Path, scope: str) -> None:
+    with connect(db_path) as connection:
+        if scope in {"all", "files"}:
+            connection.execute("DELETE FROM summaries")
+            connection.execute("DELETE FROM embeddings")
+        if scope in {"all", "folders"}:
+            connection.execute("DELETE FROM folder_summaries")
+            connection.execute("DELETE FROM folder_embeddings")
+        connection.commit()
+
+
+def iter_documents_for_regeneration(
+    db_path: Path,
+    *,
+    limit: int | None = None,
+) -> list[sqlite3.Row]:
+    with connect(db_path) as connection:
+        sql = """
+            SELECT
+                files.id AS file_id,
+                files.path,
+                files.parent_path,
+                files.filename,
+                files.extension,
+                documents.normalized_text,
+                documents.normalized_format
+            FROM documents
+            JOIN files ON files.id = documents.file_id
+            ORDER BY files.path
+        """
+        params: tuple[int, ...] = ()
+        if limit is not None:
+            sql += "\nLIMIT ?"
+            params = (limit,)
+        return list(connection.execute(sql, params).fetchall())
+
+
+def iter_folders_for_regeneration(
+    db_path: Path,
+    *,
+    limit: int | None = None,
+) -> list[sqlite3.Row]:
+    with connect(db_path) as connection:
+        sql = """
+            SELECT
+                id,
+                path,
+                folder_name
+            FROM folders
+            ORDER BY path
+        """
+        params: tuple[int, ...] = ()
+        if limit is not None:
+            sql += "\nLIMIT ?"
+            params = (limit,)
+        return list(connection.execute(sql, params).fetchall())
+
+
 def list_embeddings(db_path: Path) -> list[sqlite3.Row]:
     with connect(db_path) as connection:
         cursor = connection.execute(

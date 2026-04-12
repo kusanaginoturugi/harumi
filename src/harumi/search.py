@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from harumi.db import (
     list_embeddings,
@@ -18,7 +19,7 @@ def to_fts_query(raw_query: str) -> str:
     return " AND ".join(f'"{term}"' for term in terms)
 
 
-def find_documents(db_path: str, raw_query: str, limit: int = 10):
+def find_documents(db_path: Path, raw_query: str, limit: int = 10):
     fts_query = to_fts_query(raw_query)
     if not fts_query:
         return []
@@ -62,7 +63,7 @@ def find_documents(db_path: str, raw_query: str, limit: int = 10):
     return rows
 
 
-def find_similar_documents(db_path: str, raw_query: str, limit: int = 10):
+def find_similar_documents(db_path: Path, raw_query: str, limit: int = 10):
     query_vector, model_name = embed_text(raw_query)
     scored = []
     for row in list_embeddings(db_path):

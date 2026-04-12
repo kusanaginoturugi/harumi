@@ -6,12 +6,14 @@ from pathlib import Path
 
 from harumi.config import embedding_enabled, ensure_app_dirs
 from harumi.db import (
+    count_regeneration_targets,
     count_index_stats,
     get_db_path,
     init_db,
     insert_root,
     list_roots,
 )
+from harumi.maintenance import regenerate_summaries
 from harumi.ranking import rank_results
 from harumi.scanner import run_scan
 from harumi.search import find_documents, find_similar_documents
@@ -116,13 +118,73 @@ def status_command() -> int:
     return 0
 
 
+def regenerate_summaries_command(
+    scope: str,
+    execute: bool,
+    confirm: str | None,
+    purge_only: bool,
+    limit: int | None,
+) -> int:
+    db_path = _ensure_ready()
+    counts = count_regeneration_targets(db_path, scope)
+
+    print("Dangerous operation: regenerate-summaries")
+    print(f"Scope: {scope}")
+    print(f"File documents in scope: {counts['file_documents']}")
+    print(f"Folder records in scope: {counts['folder_records']}")
+    print(f"Existing file summaries: {counts['file_summaries']}")
+    print(f"Existing folder summaries: {counts['folder_summaries']}")
+    print(f"Existing file embeddings: {counts['file_embeddings']}")
+    print(f"Existing folder embeddings: {counts['folder_embeddings']}")
+    if limit is not None:
+        print(f"Limit: {limit}")
+    print()
+    print("This command deletes stored summaries and related embeddings before rebuilding them.")
+    print("Use this when you intentionally want to change summary language or summary policy.")
+    if purge_only:
+        print("Mode: purge-only")
+    else:
+        print("Mode: purge and regenerate")
+
+    if not execute or confirm != "RESET-SUMMARIES":
+        print()
+        print("Dry run only. No changes were made.")
+        print("To execute, rerun with:")
+        print("  --execute --confirm RESET-SUMMARIES")
+        if purge_only:
+            print("This will leave summaries empty until you regenerate them later.")
+        return 0
+
+    stats = regenerate_summaries(
+        db_path,
+        scope=scope,
+        limit=limit,
+        purge_only=purge_only,
+    )
+    print()
+    print("Summary regeneration complete")
+    print(f"File documents seen: {stats.file_documents_seen}")
+    print(f"File summaries regenerated: {stats.file_summaries_regenerated}")
+    print(f"File summary skipped: {stats.file_summary_skipped}")
+    print(f"File summary failed: {stats.file_summary_failed}")
+    print(f"File embeddings regenerated: {stats.file_embeddings_regenerated}")
+    print(f"File embedding failed: {stats.file_embedding_failed}")
+    print(f"Folders seen: {stats.folders_seen}")
+    print(f"Folder summaries regenerated: {stats.folder_summaries_regenerated}")
+    print(f"Folder summary skipped: {stats.folder_summary_skipped}")
+    print(f"Folder summary failed: {stats.folder_summary_failed}")
+    print(f"Folder embeddings regenerated: {stats.folder_embeddings_regenerated}")
+    print(f"Folder embedding failed: {stats.folder_embedding_failed}")
+    return 0
+
+
 def find_command(query: str, limit: int) -> int:
     db_path = _ensure_ready()
-    fts_rows = find_documents(str(db_path), query, limit=limit)
+    fts_rows = find_documents(db_path, query, limit=limit)
     vector_rows = []
     if embedding_enabled():
         try:
-            vector_rows = find_similar_documents(str(db_path), query, limit=limit)
+            vector_rows = find_similar_documents(db_path, query, limit=limit)
         except Exception:
             vector_rows = []
 
@@ -185,6 +247,19 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("init", help="Initialize Harumi local storage.")
     subparsers.add_parser("scan", help="Scan enabled roots and collect file metadata.")
     subparsers.add_parser("status", help="Show local dependency and model readiness.")
+    regen_parser = subparsers.add_parser(
+        "regenerate-summaries",
+        help="Dangerously purge and rebuild stored summaries and related embeddings.",
+    )
+    regen_parser.add_argument(
+        "--scope",
+        choices=("all", "files", "folders"),
+        default="all",
+    )
+    regen_parser.add_argument("--execute", action="store_true")
+    regen_parser.add_argument("--confirm")
+    regen_parser.add_argument("--purge-only", action="store_true")
+    regen_parser.add_argument("--limit", type=int)
     find_parser = subparsers.add_parser("find", help="Search normalized documents.")
     find_parser.add_argument("query")
     find_parser.add_argument("--limit", type=int, default=10)
@@ -210,6 +285,14 @@ def main(argv: list[str] | None = None) -> int:
         return scan_command()
     if args.command == "status":
         return status_command()
+    if args.command == "regenerate-summaries":
+        return regenerate_summaries_command(
+            args.scope,
+            args.execute,
+            args.confirm,
+            args.purge_only,
+            args.limit,
+        )
     if args.command == "find":
         return find_command(args.query, args.limit)
     if args.command == "roots" and args.roots_command == "add":

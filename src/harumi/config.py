@@ -10,6 +10,7 @@ SUMMARY_ENABLED_ENV = "HARUMI_ENABLE_SUMMARY"
 SUMMARY_MIN_CHARS_ENV = "HARUMI_SUMMARY_MIN_CHARS"
 SUMMARY_CODE_ENABLED_ENV = "HARUMI_SUMMARY_CODE"
 FOLDER_SUMMARY_MIN_ITEMS_ENV = "HARUMI_FOLDER_SUMMARY_MIN_ITEMS"
+SUMMARY_LANGUAGE_ENV = "HARUMI_SUMMARY_LANGUAGE"
 EMBED_MODEL_ENV = "HARUMI_EMBED_MODEL"
 EMBED_ENABLED_ENV = "HARUMI_ENABLE_EMBEDDING"
 
@@ -66,6 +67,13 @@ def get_folder_summary_min_items() -> int:
         return max(1, int(raw))
     except ValueError:
         return 2
+
+
+def get_summary_language() -> str:
+    value = os.environ.get(SUMMARY_LANGUAGE_ENV, "ja").strip().lower()
+    if not value:
+        return "ja"
+    return value
 
 
 def get_embed_model() -> str:

@@ -6,6 +6,7 @@ from pathlib import Path
 
 from harumi.config import (
     get_folder_summary_min_items,
+    get_summary_language,
     get_summary_min_chars,
     get_summary_model,
     summary_code_enabled,
@@ -38,9 +39,31 @@ CODE_EXTENSIONS = {
 }
 
 
+def _summary_language_instructions() -> str:
+    language = get_summary_language()
+    if language == "ja":
+        return (
+            "必ず日本語で回答してください。"
+            "出力は1〜3文の簡潔な要約だけにしてください。"
+            "箇条書きや前置きは不要です。"
+        )
+    if language == "en":
+        return (
+            "Respond in English."
+            " Return only a concise 1-3 sentence summary."
+            " Do not add bullet points or preamble."
+        )
+    return (
+        f"Respond in {language} if possible."
+        " Return only a concise 1-3 sentence summary."
+        " Do not add bullet points or preamble."
+    )
+
+
 def build_summary_prompt(path: str, normalized_text: str) -> str:
     preview = normalized_text[:6000]
     return (
+        f"{_summary_language_instructions()}\n\n"
         "Summarize this file in 1-3 concise sentences. "
         "Focus on what the file is for, the main topics, and what someone would use it for.\n\n"
         f"Path: {path}\n\n"
@@ -51,6 +74,7 @@ def build_summary_prompt(path: str, normalized_text: str) -> str:
 
 def build_folder_summary_prompt(path: str, child_descriptions: str) -> str:
     return (
+        f"{_summary_language_instructions()}\n\n"
         "Summarize this folder in 1-3 concise sentences. "
         "Focus on what kinds of files it contains and what someone would use this folder for.\n\n"
         f"Folder path: {path}\n\n"

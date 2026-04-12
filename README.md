@@ -21,7 +21,7 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -U pip
 pip install -e .
-pip install -U "markitdown[all]"
+pip install -U "markitdown[pdf,docx,pptx,xlsx,xls]"
 harumi init
 harumi roots add ~/Documents
 harumi scan
@@ -105,6 +105,12 @@ Check local readiness:
 harumi status
 ```
 
+Dangerous maintenance command for rebuilding summaries after changing language or summary policy:
+
+```bash
+harumi regenerate-summaries --scope all --execute --confirm RESET-SUMMARIES
+```
+
 ## Environment variables
 
 Harumi uses these environment variables when needed:
@@ -113,6 +119,8 @@ Harumi uses these environment variables when needed:
   - override the default local storage directory
 - `HARUMI_SUMMARY_MODEL`
   - summary model name for Ollama
+- `HARUMI_SUMMARY_LANGUAGE`
+  - summary output language, default `ja`
 - `HARUMI_EMBED_MODEL`
   - embedding model name for Ollama
 - `HARUMI_ENABLE_SUMMARY`
@@ -130,6 +138,7 @@ Example:
 
 ```bash
 HARUMI_SUMMARY_MODEL=gemma3:latest \
+HARUMI_SUMMARY_LANGUAGE=ja \
 HARUMI_EMBED_MODEL=embeddinggemma \
 harumi scan
 ```
