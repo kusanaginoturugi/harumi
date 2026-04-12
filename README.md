@@ -117,8 +117,14 @@ Harumi uses these environment variables when needed:
   - embedding model name for Ollama
 - `HARUMI_ENABLE_SUMMARY`
   - set to `0` to disable summary generation
+- `HARUMI_SUMMARY_MIN_CHARS`
+  - minimum normalized text length to summarize, default `400`
+- `HARUMI_SUMMARY_CODE`
+  - set to `1` to summarize code and config files too
 - `HARUMI_ENABLE_EMBEDDING`
   - set to `0` to disable embedding generation
+- `HARUMI_FOLDER_SUMMARY_MIN_ITEMS`
+  - minimum number of visible child items before summarizing a folder, default `2`
 
 Example:
 
@@ -127,6 +133,8 @@ HARUMI_SUMMARY_MODEL=gemma3:latest \
 HARUMI_EMBED_MODEL=embeddinggemma \
 harumi scan
 ```
+
+To keep large scans faster, Harumi skips summaries for very short files by default, and it does not summarize code files unless `HARUMI_SUMMARY_CODE=1` is set.
 
 ## Notes
 

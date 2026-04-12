@@ -114,8 +114,14 @@ harumi status
   - Ollama の embedding モデル名
 - `HARUMI_ENABLE_SUMMARY`
   - `0` にすると要約生成を無効化
+- `HARUMI_SUMMARY_MIN_CHARS`
+  - 要約対象にする最小文字数。既定値は `400`
+- `HARUMI_SUMMARY_CODE`
+  - `1` にするとコードや設定ファイルも要約する
 - `HARUMI_ENABLE_EMBEDDING`
   - `0` にすると embedding 生成を無効化
+- `HARUMI_FOLDER_SUMMARY_MIN_ITEMS`
+  - フォルダ要約を作る最小子要素数。既定値は `2`
 
 例:
 
@@ -124,6 +130,8 @@ HARUMI_SUMMARY_MODEL=gemma3:latest \
 HARUMI_EMBED_MODEL=embeddinggemma \
 harumi scan
 ```
+
+大規模スキャンを少し軽くするため、Harumi は既定で短すぎる文書の要約を省き、コードファイルは `HARUMI_SUMMARY_CODE=1` を指定したときだけ要約します。
 
 ## メモ
 

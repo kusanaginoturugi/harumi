@@ -2,12 +2,40 @@ from __future__ import annotations
 
 import re
 import subprocess
+from pathlib import Path
 
-from harumi.config import get_summary_model
+from harumi.config import (
+    get_folder_summary_min_items,
+    get_summary_min_chars,
+    get_summary_model,
+    summary_code_enabled,
+)
 
 
 PROMPT_VERSION = "v1"
 ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
+CODE_EXTENSIONS = {
+    ".py",
+    ".js",
+    ".ts",
+    ".tsx",
+    ".jsx",
+    ".sh",
+    ".zsh",
+    ".bash",
+    ".c",
+    ".cc",
+    ".cpp",
+    ".h",
+    ".hpp",
+    ".java",
+    ".rb",
+    ".go",
+    ".rs",
+    ".css",
+    ".scss",
+    ".sql",
+}
 
 
 def build_summary_prompt(path: str, normalized_text: str) -> str:
@@ -52,6 +80,21 @@ def summarize_folder(path: str, child_descriptions: str) -> tuple[str, str]:
     model = get_summary_model()
     prompt = build_folder_summary_prompt(path, child_descriptions)
     return _run_summary_prompt(model, prompt), model
+
+
+def should_summarize_text(path: str, normalized_text: str, normalized_format: str) -> bool:
+    if len(normalized_text.strip()) < get_summary_min_chars():
+        return False
+    if normalized_format == "markdown":
+        return True
+    if summary_code_enabled():
+        return True
+    return Path(path).suffix.lower() not in CODE_EXTENSIONS
+
+
+def should_summarize_folder(child_descriptions: str) -> bool:
+    child_count = len([line for line in child_descriptions.splitlines() if line.strip()])
+    return child_count >= get_folder_summary_min_items()
 
 
 def _run_summary_prompt(model: str, prompt: str) -> str:

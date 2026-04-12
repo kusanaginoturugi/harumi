@@ -6,13 +6,7 @@ from pathlib import Path
 
 from harumi.config import embedding_enabled, ensure_app_dirs
 from harumi.db import (
-    count_documents,
-    count_embeddings,
-    count_files,
-    count_folder_embeddings,
-    count_folder_summaries,
-    count_folders,
-    count_summaries,
+    count_index_stats,
     get_db_path,
     init_db,
     insert_root,
@@ -74,13 +68,12 @@ def list_roots_command() -> int:
 def scan_command() -> int:
     db_path = _ensure_ready()
     stats = run_scan(db_path)
-    total_files = count_files(db_path)
-    total_folders = count_folders(db_path)
-    total_documents = count_documents(db_path)
-    total_summaries = count_summaries(db_path)
-    total_folder_summaries = count_folder_summaries(db_path)
-    total_embeddings = count_embeddings(db_path)
-    total_folder_embeddings = count_folder_embeddings(db_path)
+    index_counts: dict[str, int] | None = None
+    count_error: Exception | None = None
+    try:
+        index_counts = count_index_stats(db_path)
+    except Exception as exc:
+        count_error = exc
 
     print("Scan complete")
     print(f"Discovered: {stats.discovered}")
@@ -91,22 +84,29 @@ def scan_command() -> int:
     print(f"Normalized: {stats.normalized}")
     print(f"Normalization skipped: {stats.normalization_skipped}")
     print(f"Summarized: {stats.summarized}")
+    print(f"Summary skipped: {stats.summary_skipped}")
     print(f"Summary failed: {stats.summary_failed}")
     print(f"Embedded: {stats.embedded}")
     print(f"Embedding failed: {stats.embedding_failed}")
     print(f"Folders indexed: {stats.folders_indexed}")
+    print(f"Folders skipped: {stats.folder_skipped}")
     print(f"Folders summarized: {stats.folder_summarized}")
+    print(f"Folder summary skipped: {stats.folder_summary_skipped}")
     print(f"Folder summary failed: {stats.folder_summary_failed}")
     print(f"Folders embedded: {stats.folder_embedded}")
     print(f"Folder embedding failed: {stats.folder_embedding_failed}")
     print(f"Failed: {stats.failed}")
-    print(f"Tracked files: {total_files}")
-    print(f"Tracked folders: {total_folders}")
-    print(f"Normalized documents: {total_documents}")
-    print(f"Summaries: {total_summaries}")
-    print(f"Folder summaries: {total_folder_summaries}")
-    print(f"Embeddings: {total_embeddings}")
-    print(f"Folder embeddings: {total_folder_embeddings}")
+    if index_counts is not None:
+        print(f"Tracked files: {index_counts['files']}")
+        print(f"Tracked folders: {index_counts['folders']}")
+        print(f"Normalized documents: {index_counts['documents']}")
+        print(f"Summaries: {index_counts['summaries']}")
+        print(f"Folder summaries: {index_counts['folder_summaries']}")
+        print(f"Embeddings: {index_counts['embeddings']}")
+        print(f"Folder embeddings: {index_counts['folder_embeddings']}")
+    else:
+        print("Index counts: unavailable")
+        print(f"Count error: {count_error}")
     return 0
 
 

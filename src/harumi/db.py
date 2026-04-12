@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import time
+from contextlib import nullcontext
 from pathlib import Path
 
 
@@ -68,6 +69,7 @@ CREATE TABLE IF NOT EXISTS folders (
     file_count INTEGER NOT NULL DEFAULT 0,
     child_folder_count INTEGER NOT NULL DEFAULT 0,
     latest_mtime REAL NOT NULL DEFAULT 0,
+    content_fingerprint TEXT NOT NULL DEFAULT '',
     last_scanned_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY(root_id) REFERENCES roots(id) ON DELETE CASCADE
 );
@@ -115,16 +117,21 @@ def connect(db_path: Path) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     last_error: sqlite3.OperationalError | None = None
 
-    for delay in (0.0, 0.2, 0.5, 1.0):
+    for delay in (0.0, 0.2, 0.5, 1.0, 2.0, 4.0):
         if delay:
             time.sleep(delay)
         try:
             connection = sqlite3.connect(db_path, timeout=30)
             connection.row_factory = sqlite3.Row
+            connection.execute("PRAGMA busy_timeout = 30000")
             return connection
         except sqlite3.OperationalError as exc:
             last_error = exc
-            if "unable to open database file" not in str(exc).lower():
+            message = str(exc).lower()
+            if (
+                "unable to open database file" not in message
+                and "database is locked" not in message
+            ):
                 raise
 
     assert last_error is not None
@@ -145,6 +152,10 @@ def _run_migrations(connection: sqlite3.Connection) -> None:
     if "latest_mtime" not in folder_columns:
         connection.execute(
             "ALTER TABLE folders ADD COLUMN latest_mtime REAL NOT NULL DEFAULT 0"
+        )
+    if "content_fingerprint" not in folder_columns:
+        connection.execute(
+            "ALTER TABLE folders ADD COLUMN content_fingerprint TEXT NOT NULL DEFAULT ''"
         )
     connection.commit()
 
@@ -175,6 +186,13 @@ def get_enabled_roots(db_path: Path) -> list[sqlite3.Row]:
         return list(cursor.fetchall())
 
 
+def get_enabled_roots_with_connection(connection: sqlite3.Connection) -> list[sqlite3.Row]:
+    cursor = connection.execute(
+        "SELECT id, path FROM roots WHERE enabled = 1 ORDER BY path"
+    )
+    return list(cursor.fetchall())
+
+
 def upsert_file_record(
     db_path: Path,
     *,
@@ -185,8 +203,10 @@ def upsert_file_record(
     extension: str,
     size_bytes: int,
     mtime: float,
+    connection: sqlite3.Connection | None = None,
 ) -> tuple[str, int]:
-    with connect(db_path) as connection:
+    manager = nullcontext(connection) if connection is not None else connect(db_path)
+    with manager as connection:
         existing = connection.execute(
             "SELECT id, size_bytes, mtime FROM files WHERE path = ?",
             (path,),
@@ -254,10 +274,13 @@ def upsert_folder_record(
     file_count: int,
     child_folder_count: int,
     latest_mtime: float,
-) -> int:
-    with connect(db_path) as connection:
+    content_fingerprint: str,
+    connection: sqlite3.Connection | None = None,
+) -> tuple[int, bool]:
+    manager = nullcontext(connection) if connection is not None else connect(db_path)
+    with manager as connection:
         existing = connection.execute(
-            "SELECT id FROM folders WHERE path = ?",
+            "SELECT id, content_fingerprint FROM folders WHERE path = ?",
             (path,),
         ).fetchone()
 
@@ -265,13 +288,22 @@ def upsert_folder_record(
             cursor = connection.execute(
                 """
                 INSERT INTO folders (
-                    root_id, path, parent_path, folder_name, file_count, child_folder_count, latest_mtime, last_scanned_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    root_id, path, parent_path, folder_name, file_count, child_folder_count, latest_mtime, content_fingerprint, last_scanned_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                 """,
-                (root_id, path, parent_path, folder_name, file_count, child_folder_count, latest_mtime),
+                (
+                    root_id,
+                    path,
+                    parent_path,
+                    folder_name,
+                    file_count,
+                    child_folder_count,
+                    latest_mtime,
+                    content_fingerprint,
+                ),
             )
             connection.commit()
-            return int(cursor.lastrowid)
+            return int(cursor.lastrowid), True
 
         connection.execute(
             """
@@ -282,13 +314,24 @@ def upsert_folder_record(
                 file_count = ?,
                 child_folder_count = ?,
                 latest_mtime = ?,
+                content_fingerprint = ?,
                 last_scanned_at = CURRENT_TIMESTAMP
             WHERE path = ?
             """,
-            (root_id, parent_path, folder_name, file_count, child_folder_count, latest_mtime, path),
+            (
+                root_id,
+                parent_path,
+                folder_name,
+                file_count,
+                child_folder_count,
+                latest_mtime,
+                content_fingerprint,
+                path,
+            ),
         )
         connection.commit()
-        return int(existing["id"])
+        changed = existing["content_fingerprint"] != content_fingerprint
+        return int(existing["id"]), changed
 
 
 def upsert_document(
@@ -297,8 +340,10 @@ def upsert_document(
     file_id: int,
     normalized_text: str,
     normalized_format: str,
+    connection: sqlite3.Connection | None = None,
 ) -> None:
-    with connect(db_path) as connection:
+    manager = nullcontext(connection) if connection is not None else connect(db_path)
+    with manager as connection:
         connection.execute(
             """
             INSERT INTO documents (file_id, normalized_text, normalized_format, char_count, updated_at)
@@ -333,8 +378,10 @@ def upsert_summary(
     summary_short: str,
     model_name: str,
     prompt_version: str,
+    connection: sqlite3.Connection | None = None,
 ) -> None:
-    with connect(db_path) as connection:
+    manager = nullcontext(connection) if connection is not None else connect(db_path)
+    with manager as connection:
         connection.execute(
             """
             INSERT INTO summaries (file_id, summary_short, model_name, prompt_version, updated_at)
@@ -360,8 +407,10 @@ def upsert_fts_document(
     parent_path: str,
     normalized_text: str,
     summary_short: str,
+    connection: sqlite3.Connection | None = None,
 ) -> None:
-    with connect(db_path) as connection:
+    manager = nullcontext(connection) if connection is not None else connect(db_path)
+    with manager as connection:
         connection.execute("DELETE FROM fts_documents WHERE rowid = ?", (file_id,))
         connection.execute(
             """
@@ -416,8 +465,10 @@ def upsert_folder_summary(
     summary_short: str,
     model_name: str,
     prompt_version: str,
+    connection: sqlite3.Connection | None = None,
 ) -> None:
-    with connect(db_path) as connection:
+    manager = nullcontext(connection) if connection is not None else connect(db_path)
+    with manager as connection:
         connection.execute(
             """
             INSERT INTO folder_summaries (folder_id, summary_short, model_name, prompt_version, updated_at)
@@ -446,8 +497,10 @@ def upsert_embedding(
     model_name: str,
     vector: list[float],
     source_text: str,
+    connection: sqlite3.Connection | None = None,
 ) -> None:
-    with connect(db_path) as connection:
+    manager = nullcontext(connection) if connection is not None else connect(db_path)
+    with manager as connection:
         connection.execute(
             """
             INSERT INTO embeddings (file_id, model_name, dimensions, vector_json, source_text, updated_at)
@@ -477,8 +530,10 @@ def upsert_folder_embedding(
     model_name: str,
     vector: list[float],
     source_text: str,
+    connection: sqlite3.Connection | None = None,
 ) -> None:
-    with connect(db_path) as connection:
+    manager = nullcontext(connection) if connection is not None else connect(db_path)
+    with manager as connection:
         connection.execute(
             """
             INSERT INTO folder_embeddings (folder_id, model_name, dimensions, vector_json, source_text, updated_at)
@@ -499,6 +554,23 @@ def count_folder_embeddings(db_path: Path) -> int:
     with connect(db_path) as connection:
         row = connection.execute("SELECT COUNT(*) AS count FROM folder_embeddings").fetchone()
         return int(row["count"])
+
+
+def count_index_stats(db_path: Path) -> dict[str, int]:
+    with connect(db_path) as connection:
+        queries = {
+            "files": "SELECT COUNT(*) AS count FROM files",
+            "folders": "SELECT COUNT(*) AS count FROM folders",
+            "documents": "SELECT COUNT(*) AS count FROM documents",
+            "summaries": "SELECT COUNT(*) AS count FROM summaries",
+            "folder_summaries": "SELECT COUNT(*) AS count FROM folder_summaries",
+            "embeddings": "SELECT COUNT(*) AS count FROM embeddings",
+            "folder_embeddings": "SELECT COUNT(*) AS count FROM folder_embeddings",
+        }
+        return {
+            name: int(connection.execute(sql).fetchone()["count"])
+            for name, sql in queries.items()
+        }
 
 
 def list_embeddings(db_path: Path) -> list[sqlite3.Row]:
@@ -538,8 +610,10 @@ def upsert_fts_folder(
     path: str,
     folder_name: str,
     summary_short: str,
+    connection: sqlite3.Connection | None = None,
 ) -> None:
-    with connect(db_path) as connection:
+    manager = nullcontext(connection) if connection is not None else connect(db_path)
+    with manager as connection:
         connection.execute("DELETE FROM fts_folders WHERE rowid = ?", (folder_id,))
         connection.execute(
             """

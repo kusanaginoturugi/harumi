@@ -95,7 +95,8 @@ Vector search alone is not enough.
    - Split long normalized text into chunks for embeddings and optional detailed retrieval
 
 4. Summarizer
-   - Use a local Ollama model to generate file summaries
+   - Use a local Ollama model to generate document summaries
+   - Prefer folder-level or project-level summaries for source code collections
    - Save summary text and summary metadata
 
 5. Indexer
@@ -146,6 +147,13 @@ For code and config, direct text ingestion is usually better because:
 - structure matters
 - line-level search matters
 - markdown conversion adds little value
+
+For semantic search, code should usually not be summarized file by file. A better long-term strategy is:
+
+- keep code searchable as raw text for exact and structural lookup
+- generate summaries at folder or project boundaries
+- detect project boundaries from files such as `pyproject.toml`, `package.json`, `go.mod`, or `Cargo.toml`
+- use those higher-level summaries for vague code-oriented queries
 
 ## Storage Design
 

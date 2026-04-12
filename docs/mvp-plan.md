@@ -104,12 +104,14 @@ Acceptance:
 
 ### FR-4 Summaries
 
-- Generate one short and one long summary per file using Ollama
+- Generate summaries for document-like files using Ollama
 - Save model name and prompt version
+- Keep source code searchable as text, with higher-level code summaries deferred to a later phase
 
 Acceptance:
 
 - Summary generation can be skipped for unchanged files
+- Very short files and code files may be skipped by policy
 
 ### FR-5 Embeddings
 
@@ -136,6 +138,12 @@ Acceptance:
 Acceptance:
 
 - Vague topic queries return at least one useful result in the top few items on a small test corpus
+
+### Future code search extension
+
+- Detect project boundaries using files such as `pyproject.toml`, `package.json`, `go.mod`, or `Cargo.toml`
+- Generate semantic summaries for code at folder or project level instead of per file
+- Use those summaries to improve vague code-oriented search
 
 ### FR-8 Explainable output
 
