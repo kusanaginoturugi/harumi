@@ -2,6 +2,8 @@
 
 Harumi is a local-first assistant for indexing files, storing summaries, and finding relevant files from vague natural-language queries.
 
+HARUMI stands for `Hierarchical Assistant for Retrieval, Understanding, Metadata, and Indexing`.
+
 Current status:
 
 - root directory management
