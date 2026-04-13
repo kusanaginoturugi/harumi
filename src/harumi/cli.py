@@ -228,6 +228,8 @@ def find_command(query: str, limit: int) -> int:
         print(f"   recency_component: {row['recency_component']:.4f}")
         if row["root_penalty"] > 0:
             print(f"   root_penalty: {row['root_penalty']:.4f}")
+        if row["quality_penalty"] > 0:
+            print(f"   quality_penalty: {row['quality_penalty']:.4f}")
         if row["reasons"]:
             print(f"   reasons: {', '.join(row['reasons'])}")
         if row["summary_short"]:

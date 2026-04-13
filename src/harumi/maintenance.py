@@ -5,6 +5,7 @@ from pathlib import Path
 
 from harumi.config import embedding_enabled, summary_enabled
 from harumi.db import (
+    connect,
     iter_documents_for_regeneration,
     iter_folders_for_regeneration,
     purge_summary_artifacts,
@@ -68,110 +69,117 @@ def regenerate_summaries(
     limit: int | None = None,
     purge_only: bool = False,
 ) -> RegenerationStats:
-    purge_summary_artifacts(db_path, scope)
     stats = RegenerationStats()
-    if purge_only:
-        return stats
+    with connect(db_path) as connection:
+        purge_summary_artifacts(db_path, scope, connection=connection)
+        if purge_only:
+            return stats
 
-    if scope in {"all", "files"}:
-        for row in iter_documents_for_regeneration(db_path, limit=limit):
-            stats.file_documents_seen += 1
-            summary_short = ""
-            if summary_enabled() and should_summarize_text(
-                row["path"],
-                row["normalized_text"],
-                row["normalized_format"],
-            ):
-                try:
-                    summary_short, model_name = summarize_text(row["path"], row["normalized_text"])
-                    if summary_short:
-                        upsert_summary(
+        if scope in {"all", "files"}:
+            for row in iter_documents_for_regeneration(db_path, limit=limit):
+                stats.file_documents_seen += 1
+                summary_short = ""
+                if summary_enabled() and should_summarize_text(
+                    row["path"],
+                    row["normalized_text"],
+                    row["normalized_format"],
+                ):
+                    try:
+                        summary_short, model_name = summarize_text(row["path"], row["normalized_text"])
+                        if summary_short:
+                            upsert_summary(
+                                db_path,
+                                file_id=row["file_id"],
+                                summary_short=summary_short,
+                                model_name=model_name,
+                                prompt_version=PROMPT_VERSION,
+                                connection=connection,
+                            )
+                            stats.file_summaries_regenerated += 1
+                    except Exception:
+                        stats.file_summary_failed += 1
+                elif summary_enabled():
+                    stats.file_summary_skipped += 1
+
+                if embedding_enabled():
+                    embedding_source = summary_short or row["normalized_text"][:4000]
+                    try:
+                        vector, model_name = embed_text(embedding_source)
+                        upsert_embedding(
                             db_path,
                             file_id=row["file_id"],
-                            summary_short=summary_short,
                             model_name=model_name,
-                            prompt_version=PROMPT_VERSION,
+                            vector=vector,
+                            source_text=embedding_source,
+                            connection=connection,
                         )
-                        stats.file_summaries_regenerated += 1
-                except Exception:
-                    stats.file_summary_failed += 1
-            elif summary_enabled():
-                stats.file_summary_skipped += 1
+                        stats.file_embeddings_regenerated += 1
+                    except Exception:
+                        stats.file_embedding_failed += 1
 
-            if embedding_enabled():
-                embedding_source = summary_short or row["normalized_text"][:4000]
-                try:
-                    vector, model_name = embed_text(embedding_source)
-                    upsert_embedding(
-                        db_path,
-                        file_id=row["file_id"],
-                        model_name=model_name,
-                        vector=vector,
-                        source_text=embedding_source,
-                    )
-                    stats.file_embeddings_regenerated += 1
-                except Exception:
-                    stats.file_embedding_failed += 1
+                upsert_fts_document(
+                    db_path,
+                    file_id=row["file_id"],
+                    path=row["path"],
+                    filename=row["filename"],
+                    extension=row["extension"],
+                    parent_path=row["parent_path"],
+                    normalized_text=row["normalized_text"],
+                    summary_short=summary_short,
+                    connection=connection,
+                )
 
-            upsert_fts_document(
-                db_path,
-                file_id=row["file_id"],
-                path=row["path"],
-                filename=row["filename"],
-                extension=row["extension"],
-                parent_path=row["parent_path"],
-                normalized_text=row["normalized_text"],
-                summary_short=summary_short,
-            )
+        if scope in {"all", "folders"}:
+            for row in iter_folders_for_regeneration(db_path, limit=limit):
+                stats.folders_seen += 1
+                folder_path = Path(row["path"])
+                child_descriptions = _build_folder_child_descriptions(folder_path)
+                if not child_descriptions:
+                    stats.folder_summary_skipped += 1
+                    continue
 
-    if scope in {"all", "folders"}:
-        for row in iter_folders_for_regeneration(db_path, limit=limit):
-            stats.folders_seen += 1
-            folder_path = Path(row["path"])
-            child_descriptions = _build_folder_child_descriptions(folder_path)
-            if not child_descriptions:
-                stats.folder_summary_skipped += 1
-                continue
+                summary_short = ""
+                if summary_enabled() and should_summarize_folder(child_descriptions):
+                    try:
+                        summary_short, model_name = summarize_folder(row["path"], child_descriptions)
+                        if summary_short:
+                            upsert_folder_summary(
+                                db_path,
+                                folder_id=row["id"],
+                                summary_short=summary_short,
+                                model_name=model_name,
+                                prompt_version=PROMPT_VERSION,
+                                connection=connection,
+                            )
+                            stats.folder_summaries_regenerated += 1
+                    except Exception:
+                        stats.folder_summary_failed += 1
+                elif summary_enabled():
+                    stats.folder_summary_skipped += 1
 
-            summary_short = ""
-            if summary_enabled() and should_summarize_folder(child_descriptions):
-                try:
-                    summary_short, model_name = summarize_folder(row["path"], child_descriptions)
-                    if summary_short:
-                        upsert_folder_summary(
+                if embedding_enabled():
+                    embedding_source = summary_short or child_descriptions[:4000]
+                    try:
+                        vector, model_name = embed_text(embedding_source)
+                        upsert_folder_embedding(
                             db_path,
                             folder_id=row["id"],
-                            summary_short=summary_short,
                             model_name=model_name,
-                            prompt_version=PROMPT_VERSION,
+                            vector=vector,
+                            source_text=embedding_source,
+                            connection=connection,
                         )
-                        stats.folder_summaries_regenerated += 1
-                except Exception:
-                    stats.folder_summary_failed += 1
-            elif summary_enabled():
-                stats.folder_summary_skipped += 1
+                        stats.folder_embeddings_regenerated += 1
+                    except Exception:
+                        stats.folder_embedding_failed += 1
 
-            if embedding_enabled():
-                embedding_source = summary_short or child_descriptions[:4000]
-                try:
-                    vector, model_name = embed_text(embedding_source)
-                    upsert_folder_embedding(
-                        db_path,
-                        folder_id=row["id"],
-                        model_name=model_name,
-                        vector=vector,
-                        source_text=embedding_source,
-                    )
-                    stats.folder_embeddings_regenerated += 1
-                except Exception:
-                    stats.folder_embedding_failed += 1
-
-            upsert_fts_folder(
-                db_path,
-                folder_id=row["id"],
-                path=row["path"],
-                folder_name=row["folder_name"],
-                summary_short=summary_short,
-            )
+                upsert_fts_folder(
+                    db_path,
+                    folder_id=row["id"],
+                    path=row["path"],
+                    folder_name=row["folder_name"],
+                    summary_short=summary_short,
+                    connection=connection,
+                )
 
     return stats

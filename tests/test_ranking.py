@@ -114,6 +114,84 @@ class RankingTests(unittest.TestCase):
         root_result = next(row for row in ranked if row["path"] == "/tmp/fixture")
         self.assertGreater(root_result["root_penalty"], 0.0)
 
+    def test_tiny_auxiliary_file_is_penalized_against_real_document(self) -> None:
+        results = [
+            {
+                "kind": "file",
+                "path": "/docs/sounds/acall/17/0001.wav.txt",
+                "root_path": "/docs",
+                "filename": "0001.wav.txt",
+                "extension": ".txt",
+                "normalized_format": "text",
+                "char_count": 25,
+                "summary_short": "",
+                "snippet": "",
+                "fts_score": 9999.0,
+                "vector_score": 0.66,
+                "mtime": 0.0,
+            },
+            {
+                "kind": "file",
+                "path": "/docs/manual/オートコール設計書.xlsx",
+                "root_path": "/docs",
+                "filename": "オートコール設計書.xlsx",
+                "extension": ".xlsx",
+                "normalized_format": "markdown",
+                "char_count": 5000,
+                "summary_short": "このファイルはオートコールシステムの設計書です。",
+                "snippet": "",
+                "fts_score": 9999.0,
+                "vector_score": 0.54,
+                "mtime": 0.0,
+            },
+        ]
+
+        ranked = rank_results("オートコールシステム", results)
+        self.assertEqual(ranked[0]["path"], "/docs/manual/オートコール設計書.xlsx")
+        tiny = next(row for row in ranked if row["filename"] == "0001.wav.txt")
+        self.assertGreater(tiny["quality_penalty"], 0.0)
+
+    def test_sparse_folder_is_penalized_against_richer_folder(self) -> None:
+        results = [
+            {
+                "kind": "folder",
+                "path": "/docs/precal",
+                "root_path": "/docs",
+                "filename": "precal",
+                "extension": "",
+                "normalized_format": "folder",
+                "char_count": 0,
+                "file_count": 0,
+                "child_folder_count": 1,
+                "summary_short": "",
+                "snippet": "",
+                "fts_score": 9999.0,
+                "vector_score": 0.58,
+                "mtime": 0.0,
+            },
+            {
+                "kind": "folder",
+                "path": "/docs/designオートコール",
+                "root_path": "/docs",
+                "filename": "designオートコール",
+                "extension": "",
+                "normalized_format": "folder",
+                "char_count": 0,
+                "file_count": 3,
+                "child_folder_count": 1,
+                "summary_short": "このフォルダにはオートコールの設計資料が入っています。",
+                "snippet": "",
+                "fts_score": 9999.0,
+                "vector_score": 0.54,
+                "mtime": 0.0,
+            },
+        ]
+
+        ranked = rank_results("オートコール フォルダ", results)
+        self.assertEqual(ranked[0]["path"], "/docs/designオートコール")
+        sparse = next(row for row in ranked if row["path"] == "/docs/precal")
+        self.assertGreater(sparse["quality_penalty"], 0.0)
+
 
 if __name__ == "__main__":
     unittest.main()

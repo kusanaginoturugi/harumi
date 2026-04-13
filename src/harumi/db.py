@@ -606,8 +606,13 @@ def count_regeneration_targets(db_path: Path, scope: str) -> dict[str, int]:
         return counts
 
 
-def purge_summary_artifacts(db_path: Path, scope: str) -> None:
-    with connect(db_path) as connection:
+def purge_summary_artifacts(
+    db_path: Path,
+    scope: str,
+    connection: sqlite3.Connection | None = None,
+) -> None:
+    manager = nullcontext(connection) if connection is not None else connect(db_path)
+    with manager as connection:
         if scope in {"all", "files"}:
             connection.execute("DELETE FROM summaries")
             connection.execute("DELETE FROM embeddings")

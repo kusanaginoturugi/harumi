@@ -174,6 +174,10 @@ def _filename_path_boost(filename: str, path: str, terms: list[str]) -> tuple[fl
     return score, reasons
 
 
+def _is_non_ascii(term: str) -> bool:
+    return any(ord(char) > 127 for char in term)
+
+
 def _summary_term_boost(summary_short: str, terms: list[str]) -> tuple[float, list[str]]:
     if not summary_short:
         return 0.0, []
@@ -182,6 +186,48 @@ def _summary_term_boost(summary_short: str, terms: list[str]) -> tuple[float, li
     if not hits:
         return 0.0, []
     return min(0.20, 0.05 * hits), ["summary aligned with query"]
+
+
+def _content_quality_penalty(row: dict, terms: list[str]) -> tuple[float, list[str]]:
+    penalties = 0.0
+    reasons: list[str] = []
+    kind = row.get("kind", "file")
+    char_count = row.get("char_count", 0) or 0
+    summary_short = (row.get("summary_short", "") or "").strip()
+    extension = row.get("extension", "")
+    path = row.get("path", "").lower()
+
+    if kind == "file" and char_count < 80:
+        penalties += 0.10
+        reasons.append("very small file penalty")
+    elif kind == "file" and char_count < 200:
+        penalties += 0.05
+        reasons.append("small file penalty")
+
+    if kind == "folder":
+        file_count = row.get("file_count", 0) or 0
+        child_folder_count = row.get("child_folder_count", 0) or 0
+        if file_count + child_folder_count <= 1:
+            penalties += 0.06
+            reasons.append("sparse folder penalty")
+
+    if extension == ".txt" and ".wav" in row.get("filename", "").lower():
+        penalties += 0.08
+        reasons.append("auxiliary transcript-like file penalty")
+
+    if any(segment in path for segment in ("/sounds/", "/aspnet_client")):
+        penalties += 0.06
+        reasons.append("low-signal path penalty")
+
+    if summary_short:
+        if len(summary_short) < 8:
+            penalties += 0.08
+            reasons.append("low-information summary penalty")
+        elif len(summary_short.split()) <= 2 and not any(term in summary_short.lower() for term in terms):
+            penalties += 0.06
+            reasons.append("weak summary penalty")
+
+    return penalties, reasons
 
 
 def _filetype_boost(extension: str, intent: QueryIntent) -> tuple[float, list[str]]:
@@ -249,6 +295,13 @@ def rank_results(raw_query: str, results: list[dict]) -> list[dict]:
             row["path"],
             intent.terms,
         )
+        if any(_is_non_ascii(term) for term in intent.terms):
+            if any(term in row["filename"] for term in intent.terms):
+                filename_path_component += 0.10
+                fp_reasons.append("non-ascii filename matched query terms")
+            if any(term in row["path"] for term in intent.terms):
+                filename_path_component += 0.06
+                fp_reasons.append("non-ascii path matched query terms")
         summary_component, summary_reasons = _summary_term_boost(
             row.get("summary_short", ""),
             intent.terms,
@@ -271,6 +324,10 @@ def rank_results(raw_query: str, results: list[dict]) -> list[dict]:
             row.get("kind", "file"),
             intent.terms,
         )
+        quality_penalty, quality_penalty_reasons = _content_quality_penalty(
+            row,
+            intent.terms,
+        )
 
         reasons.extend(fp_reasons)
         reasons.extend(summary_reasons)
@@ -278,6 +335,7 @@ def rank_results(raw_query: str, results: list[dict]) -> list[dict]:
         reasons.extend(kind_reasons)
         reasons.extend(recency_reasons)
         reasons.extend(root_penalty_reasons)
+        reasons.extend(quality_penalty_reasons)
         if row.get("vector_score", 0.0) > 0.45:
             reasons.append("strong semantic match")
         if row.get("fts_score", 9999.0) < 2.0:
@@ -292,6 +350,7 @@ def rank_results(raw_query: str, results: list[dict]) -> list[dict]:
             + kind_component
             + recency_component
             - root_penalty
+            - quality_penalty
         )
 
         ranked.append(
@@ -303,6 +362,7 @@ def rank_results(raw_query: str, results: list[dict]) -> list[dict]:
                 "vector_component": vector_component,
                 "recency_component": recency_component,
                 "root_penalty": root_penalty,
+                "quality_penalty": quality_penalty,
             }
         )
 
