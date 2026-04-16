@@ -4,6 +4,11 @@ import argparse
 import sys
 from pathlib import Path
 
+from rich.console import Console
+from rich.panel import Panel
+from rich.text import Text
+from rich.rule import Rule
+
 from harumi.config import embedding_enabled, ensure_app_dirs
 from harumi.db import (
     count_regeneration_targets,
@@ -178,6 +183,92 @@ def regenerate_summaries_command(
     return 0
 
 
+def _render_find_results(ranked_results: list[dict], limit: int, query: str) -> None:
+    console = Console()
+
+    console.print(
+        Rule(f"[bold]harumi find[/bold] [dim]{query!r}[/dim]", style="bright_black")
+    )
+
+    for index, row in enumerate(ranked_results[:limit], start=1):
+        is_folder = row["kind"] == "folder"
+
+        # ── Title line ──────────────────────────────────────────────
+        kind_badge = "[bold blue] folder [/bold blue]" if is_folder else "[bold cyan] file [/bold cyan]"
+        title = Text()
+        title.append(f" {index}. ", style="bold bright_white")
+        title.append(row["path"], style="bold yellow")
+        title.append("  ")
+        title_str = title.markup + kind_badge
+
+        # ── Body ────────────────────────────────────────────────────
+        body = Text()
+
+        # Metadata row
+        if is_folder:
+            meta = f"folder  ·  {row.get('file_count', 0)} files  ·  {row.get('child_folder_count', 0)} subfolders"
+        else:
+            ext = row["extension"] or "(no ext)"
+            fmt = row["normalized_format"] or ""
+            chars = row["char_count"]
+            meta = f"{ext}  ·  {fmt}  ·  {chars:,} chars"
+        body.append(meta + "\n", style="dim")
+
+        # Score row
+        score_line = Text()
+        score_line.append("score ", style="dim")
+        score_line.append(f"{row['final_score']:.4f}", style="bold green")
+        score_line.append("  vector ", style="dim")
+        score_line.append(f"{row['vector_score']:.4f}", style="cyan")
+        if row["fts_score"] < 9999:
+            score_line.append("  fts ", style="dim")
+            score_line.append(f"{row['fts_score']:.4f}", style="cyan")
+        body.append_text(score_line)
+        body.append("\n")
+
+        # Component row
+        comp_line = Text()
+        comp_line.append(
+            f"v={row['vector_component']:.4f}  "
+            f"f={row['fts_component']:.4f}  "
+            f"recency={row['recency_component']:.4f}",
+            style="dim",
+        )
+        if row["root_penalty"] > 0:
+            comp_line.append(f"  root_penalty={row['root_penalty']:.4f}", style="dim red")
+        if row["quality_penalty"] > 0:
+            comp_line.append(f"  quality_penalty={row['quality_penalty']:.4f}", style="dim red")
+        body.append_text(comp_line)
+        body.append("\n")
+
+        if row["reasons"]:
+            body.append("reasons: " + ", ".join(row["reasons"]) + "\n", style="dim italic")
+
+        # Summary
+        if row["summary_short"]:
+            body.append("\n")
+            body.append(row["summary_short"] + "\n", style="italic")
+
+        # Snippet
+        if row["snippet"]:
+            body.append("\n")
+            body.append(f'"{row["snippet"]}"\n', style="dim italic")
+
+        console.print(
+            Panel(
+                body,
+                title=title_str,
+                title_align="left",
+                border_style="bright_black",
+                padding=(0, 1),
+            )
+        )
+
+    console.print(
+        Rule(style="bright_black")
+    )
+
+
 def find_command(query: str, limit: int) -> int:
     db_path = _ensure_ready()
     fts_rows = find_documents(db_path, query, limit=limit)
@@ -203,39 +294,11 @@ def find_command(query: str, limit: int) -> int:
 
     results = list(merged.values())
     if not results:
-        print("No matches found.")
+        Console().print("[dim]No matches found.[/dim]")
         return 0
 
     ranked_results = rank_results(query, results)
-
-    for index, row in enumerate(ranked_results[:limit], start=1):
-        print(f"{index}. {row['path']}")
-        print(f"   kind: {row['kind']}")
-        print(f"   file: {row['filename']}")
-        if row["kind"] == "folder":
-            print("   type: folder")
-            print(f"   file_count: {row.get('file_count', 0)}")
-            print(f"   child_folders: {row.get('child_folder_count', 0)}")
-        else:
-            print(f"   type: {row['extension'] or '(no extension)'} / {row['normalized_format']}")
-            print(f"   chars: {row['char_count']}")
-        print(f"   final_score: {row['final_score']:.4f}")
-        print(f"   vector_score: {row['vector_score']:.4f}")
-        if row["fts_score"] < 9999:
-            print(f"   fts_score: {row['fts_score']:.4f}")
-        print(f"   vector_component: {row['vector_component']:.4f}")
-        print(f"   fts_component: {row['fts_component']:.4f}")
-        print(f"   recency_component: {row['recency_component']:.4f}")
-        if row["root_penalty"] > 0:
-            print(f"   root_penalty: {row['root_penalty']:.4f}")
-        if row["quality_penalty"] > 0:
-            print(f"   quality_penalty: {row['quality_penalty']:.4f}")
-        if row["reasons"]:
-            print(f"   reasons: {', '.join(row['reasons'])}")
-        if row["summary_short"]:
-            print(f"   summary: {row['summary_short']}")
-        if row["snippet"]:
-            print(f"   snippet: {row['snippet']}")
+    _render_find_results(ranked_results, limit, query)
     return 0
 
 
