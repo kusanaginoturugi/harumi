@@ -7,9 +7,15 @@ from pathlib import Path
 
 from rich.console import Console
 from rich.panel import Panel
-from rich.text import Text
 from rich.rule import Rule
+from rich.text import Text
 
+from harumi.browser_history import (
+    BrowserHistorySource,
+    discover_browser_history_sources,
+    import_browser_history,
+    parse_date_range,
+)
 from harumi.config import embedding_enabled, ensure_app_dirs
 from harumi.db import (
     count_regeneration_targets,
@@ -19,11 +25,14 @@ from harumi.db import (
     insert_root,
     list_roots,
 )
+from harumi.harumi_config import config_get_command, config_set_command
+from harumi.info import info_command
 from harumi.maintenance import regenerate_summaries
 from harumi.ranking import rank_results
 from harumi.scanner import run_scan
 from harumi.search import find_documents, find_similar_documents
 from harumi.status import get_status_report
+from harumi.worklog import worklog_command, retrospect_command
 
 
 def _ensure_ready() -> Path:
@@ -152,8 +161,117 @@ def scan_command(progress_interval: float, progress_percent: float) -> int:
 
 
 def status_command() -> int:
+    from rich.console import Console
+    from rich.rule import Rule
+    from rich.table import Table
+    from rich.text import Text
+
+    console = Console()
+    console.print(Rule("Status", style="bold"))
+
+    t = Table(show_header=False, box=None, padding=(0, 2, 0, 0))
+    t.add_column("mark", min_width=2)
+    t.add_column("name", style="dim", min_width=20)
+    t.add_column("detail")
+
     for name, state, detail in get_status_report():
-        print(f"{name}\t{state}\t{detail}")
+        if state == "ok":
+            mark = Text("ok", style="green")
+        elif state == "disabled":
+            mark = Text("--", style="dim")
+        else:
+            mark = Text("NG", style="bold red")
+        t.add_row(mark, name, detail)
+
+    console.print(t)
+    return 0
+
+
+def browser_history_sources_command() -> int:
+    sources = discover_browser_history_sources()
+    if not sources:
+        print("No browser history sources found.")
+        return 0
+    for source in sources:
+        print(f"{source.browser}\t{source.profile}\t{source.path}")
+    return 0
+
+
+def browser_history_import_command(
+    browser: str,
+    source_path: Path | None,
+    from_date: str | None,
+    to_date: str | None,
+    last: str | None,
+    execute: bool,
+    confirm: str | None,
+    keep_query: bool,
+    redact_title: bool,
+    include_domain: list[str] | None,
+    exclude_domain: list[str] | None,
+    limit: int,
+) -> int:
+    db_path = _ensure_ready()
+    try:
+        start_ts, end_ts, range_label = parse_date_range(from_date, to_date, last)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+
+    if source_path is not None:
+        resolved = source_path.expanduser().resolve()
+        if not resolved.exists():
+            print(f"History DB does not exist: {resolved}", file=sys.stderr)
+            return 2
+        sources = [
+            BrowserHistorySource(
+                browser=browser if browser != "auto" else "custom",
+                profile=resolved.parent.name,
+                kind="firefox" if resolved.name == "places.sqlite" else "chromium",
+                path=resolved,
+            )
+        ]
+    else:
+        sources = discover_browser_history_sources()
+        if browser != "auto":
+            sources = [source for source in sources if source.browser == browser]
+
+    print("Sensitive operation: browser-history import")
+    print(f"Range: {range_label}")
+    print(f"Sources: {len(sources)}")
+    print(f"URL query/fragment redaction: {'off' if keep_query else 'on'}")
+    print(f"Title redaction: {'on' if redact_title else 'off'}")
+    if include_domain:
+        print(f"Include domains: {', '.join(include_domain)}")
+    if exclude_domain:
+        print(f"Exclude domains: {', '.join(exclude_domain)}")
+    print()
+    print("This imports browser visit titles and URLs into Harumi activity events.")
+    print("Default behavior strips query strings and fragments from URLs.")
+
+    stats = import_browser_history(
+        db_path,
+        sources=sources,
+        start_ts=start_ts,
+        end_ts=end_ts,
+        execute=execute and confirm == "IMPORT-BROWSER-HISTORY",
+        strip_url_query=not keep_query,
+        redact_title=redact_title,
+        include_domains=include_domain,
+        exclude_domains=exclude_domain,
+        limit_per_source=limit,
+    )
+
+    print()
+    print(f"Visits read: {stats.visits_seen}")
+    print(f"Visits after filters: {stats.visits_after_filters}")
+    if not execute or confirm != "IMPORT-BROWSER-HISTORY":
+        print("Dry run only. No browser history was stored.")
+        print("To execute, rerun with:")
+        print("  --execute --confirm IMPORT-BROWSER-HISTORY")
+        return 0
+
+    print(f"Imported new events: {stats.imported}")
     return 0
 
 
@@ -357,7 +475,26 @@ def build_parser() -> argparse.ArgumentParser:
         default=1.0,
         help="Emit scan progress whenever another N percent is completed.",
     )
-    subparsers.add_parser("status", help="Show local dependency and model readiness.")
+    subparsers.add_parser("status", help="Show Ollama and dependency readiness.")
+    subparsers.add_parser("info", help="Show index stats, storage, LLM config, and env vars.")
+    browser_parser = subparsers.add_parser("browser-history", help="Import browser history as worklog events.")
+    browser_subparsers = browser_parser.add_subparsers(dest="browser_history_command")
+
+    browser_subparsers.add_parser("sources", help="List discovered browser history databases.")
+
+    browser_import_parser = browser_subparsers.add_parser("import", help="Import browser history events.")
+    browser_import_parser.add_argument("--browser", choices=("auto", "chrome", "chromium", "brave", "firefox"), default="auto")
+    browser_import_parser.add_argument("--source", type=Path, help="Explicit browser history database path.")
+    browser_import_parser.add_argument("--from", dest="from_date")
+    browser_import_parser.add_argument("--to", dest="to_date")
+    browser_import_parser.add_argument("--last", default="7d", help="Relative range such as 24h, 7d, or 30d.")
+    browser_import_parser.add_argument("--execute", action="store_true")
+    browser_import_parser.add_argument("--confirm")
+    browser_import_parser.add_argument("--keep-query", action="store_true", help="Store full URLs including query strings.")
+    browser_import_parser.add_argument("--redact-title", action="store_true", help="Store URLs without page titles.")
+    browser_import_parser.add_argument("--include-domain", action="append")
+    browser_import_parser.add_argument("--exclude-domain", action="append")
+    browser_import_parser.add_argument("--limit", type=int, default=1000, help="Maximum visits to read per browser source.")
     regen_parser = subparsers.add_parser(
         "regenerate-summaries",
         help="Dangerously purge and rebuild stored summaries and related embeddings.",
@@ -383,6 +520,31 @@ def build_parser() -> argparse.ArgumentParser:
 
     roots_subparsers.add_parser("list", help="List registered root directories.")
 
+    worklog_parser = subparsers.add_parser("worklog", help="Summarize today's work from modified files.")
+    worklog_parser.add_argument("--date", default="today", help="Date to summarize (YYYY-MM-DD / today / yesterday)")
+    worklog_parser.add_argument("--output", choices=("text", "markdown"), default="text")
+    worklog_parser.add_argument("--limit", type=int, default=50)
+    worklog_parser.add_argument("--no-llm", action="store_true", help="Skip LLM synthesis; show file list only.")
+
+    retrospect_parser = subparsers.add_parser("retrospect", help="Retrospect work for a year, month, or day.")
+    retrospect_parser.add_argument(
+        "period",
+        help="4 digits=year (2026), 6 digits=month (202604), 8 digits=day (20260430)",
+    )
+    retrospect_parser.add_argument("--output", choices=("text", "markdown"), default="text")
+    retrospect_parser.add_argument("--limit", type=int, default=100)
+    retrospect_parser.add_argument("--no-llm", action="store_true", help="Skip LLM synthesis; show file list only.")
+
+    config_parser = subparsers.add_parser("config", help="Manage persistent configuration.")
+    config_subparsers = config_parser.add_subparsers(dest="config_command")
+
+    config_get_parser = config_subparsers.add_parser("get", help="Show config value(s).")
+    config_get_parser.add_argument("key", nargs="?", help="Key to get (omit to show all).")
+
+    config_set_parser = config_subparsers.add_parser("set", help="Set a config value.")
+    config_set_parser.add_argument("key")
+    config_set_parser.add_argument("value")
+
     return parser
 
 
@@ -396,6 +558,28 @@ def main(argv: list[str] | None = None) -> int:
         return scan_command(args.progress_interval, args.progress_percent)
     if args.command == "status":
         return status_command()
+    if args.command == "info":
+        return info_command()
+    if args.command == "browser-history":
+        if args.browser_history_command == "sources":
+            return browser_history_sources_command()
+        if args.browser_history_command == "import":
+            return browser_history_import_command(
+                args.browser,
+                args.source,
+                args.from_date,
+                args.to_date,
+                args.last,
+                args.execute,
+                args.confirm,
+                args.keep_query,
+                args.redact_title,
+                args.include_domain,
+                args.exclude_domain,
+                args.limit,
+            )
+        parser.print_help()
+        return 0
     if args.command == "regenerate-summaries":
         return regenerate_summaries_command(
             args.scope,
@@ -410,6 +594,24 @@ def main(argv: list[str] | None = None) -> int:
         return add_root_command(args.path)
     if args.command == "roots" and args.roots_command == "list":
         return list_roots_command()
+    if args.command == "worklog":
+        return worklog_command(
+            args.date,
+            args.output,
+            args.limit,
+            args.no_llm,
+        )
+    if args.command == "retrospect":
+        return retrospect_command(
+            args.period,
+            args.output,
+            args.limit,
+            args.no_llm,
+        )
+    if args.command == "config":
+        if args.config_command == "set":
+            return config_set_command(args.key, args.value)
+        return config_get_command(getattr(args, "key", None))
 
     parser.print_help()
     return 0

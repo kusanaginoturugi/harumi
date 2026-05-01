@@ -106,6 +106,25 @@ CREATE VIRTUAL TABLE IF NOT EXISTS fts_folders USING fts5(
     folder_name,
     summary_short
 );
+
+CREATE TABLE IF NOT EXISTS activity_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    event_time REAL NOT NULL,
+    title TEXT NOT NULL DEFAULT '',
+    url TEXT NOT NULL DEFAULT '',
+    path TEXT NOT NULL DEFAULT '',
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    dedupe_key TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_activity_events_time
+ON activity_events(event_time);
+
+CREATE INDEX IF NOT EXISTS idx_activity_events_source_time
+ON activity_events(source, event_time);
 """
 
 
@@ -157,6 +176,30 @@ def _run_migrations(connection: sqlite3.Connection) -> None:
         connection.execute(
             "ALTER TABLE folders ADD COLUMN content_fingerprint TEXT NOT NULL DEFAULT ''"
         )
+    connection.commit()
+
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS activity_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source TEXT NOT NULL,
+            event_type TEXT NOT NULL,
+            event_time REAL NOT NULL,
+            title TEXT NOT NULL DEFAULT '',
+            url TEXT NOT NULL DEFAULT '',
+            path TEXT NOT NULL DEFAULT '',
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            dedupe_key TEXT NOT NULL UNIQUE,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_activity_events_time
+        ON activity_events(event_time);
+
+        CREATE INDEX IF NOT EXISTS idx_activity_events_source_time
+        ON activity_events(source, event_time);
+        """
+    )
     connection.commit()
 
 
@@ -566,11 +609,81 @@ def count_index_stats(db_path: Path) -> dict[str, int]:
             "folder_summaries": "SELECT COUNT(*) AS count FROM folder_summaries",
             "embeddings": "SELECT COUNT(*) AS count FROM embeddings",
             "folder_embeddings": "SELECT COUNT(*) AS count FROM folder_embeddings",
+            "activity_events": "SELECT COUNT(*) AS count FROM activity_events",
         }
         return {
             name: int(connection.execute(sql).fetchone()["count"])
             for name, sql in queries.items()
         }
+
+
+def upsert_activity_events(
+    db_path: Path,
+    events: list[dict],
+    connection: sqlite3.Connection | None = None,
+) -> int:
+    if not events:
+        return 0
+    manager = nullcontext(connection) if connection is not None else connect(db_path)
+    inserted = 0
+    with manager as connection:
+        for event in events:
+            cursor = connection.execute(
+                """
+                INSERT OR IGNORE INTO activity_events (
+                    source, event_type, event_time, title, url, path, metadata_json, dedupe_key
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    event["source"],
+                    event["event_type"],
+                    event["event_time"],
+                    event.get("title", ""),
+                    event.get("url", ""),
+                    event.get("path", ""),
+                    event.get("metadata_json", "{}"),
+                    event["dedupe_key"],
+                ),
+            )
+            inserted += cursor.rowcount
+        connection.commit()
+    return inserted
+
+
+def query_activity_events_in_range(
+    db_path: Path,
+    *,
+    start_ts: float,
+    end_ts: float,
+    limit: int = 100,
+    source_prefix: str | None = None,
+) -> list[sqlite3.Row]:
+    with connect(db_path) as connection:
+        params: list[object] = [start_ts, end_ts]
+        source_clause = ""
+        if source_prefix:
+            source_clause = "AND source LIKE ?"
+            params.append(f"{source_prefix}%")
+        params.append(limit)
+        cursor = connection.execute(
+            f"""
+            SELECT
+                source,
+                event_type,
+                event_time,
+                title,
+                url,
+                path,
+                metadata_json
+            FROM activity_events
+            WHERE event_time >= ? AND event_time < ?
+              {source_clause}
+            ORDER BY event_time DESC
+            LIMIT ?
+            """,
+            tuple(params),
+        )
+        return list(cursor.fetchall())
 
 
 def count_regeneration_targets(db_path: Path, scope: str) -> dict[str, int]:
@@ -745,6 +858,35 @@ def search_folders(db_path: Path, query: str, limit: int = 10) -> list[sqlite3.R
             LIMIT ?
             """,
             (query, limit),
+        )
+        return list(cursor.fetchall())
+
+
+def query_files_in_range(
+    db_path: Path,
+    *,
+    start_ts: float,
+    end_ts: float,
+    limit: int = 100,
+) -> list[sqlite3.Row]:
+    with connect(db_path) as connection:
+        cursor = connection.execute(
+            """
+            SELECT
+                files.path,
+                files.filename,
+                files.extension,
+                files.parent_path,
+                files.mtime,
+                files.size_bytes,
+                COALESCE(summaries.summary_short, '') AS summary_short
+            FROM files
+            LEFT JOIN summaries ON summaries.file_id = files.id
+            WHERE files.mtime >= ? AND files.mtime < ?
+            ORDER BY files.mtime DESC
+            LIMIT ?
+            """,
+            (start_ts, end_ts, limit),
         )
         return list(cursor.fetchall())
 

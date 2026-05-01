@@ -98,6 +98,21 @@ harumi find "スクショをクラウドに送るスクリプト"
 harumi find "旅行フォルダはどこ"
 ```
 
+Downloads は通常の索引対象として追加します。
+
+```bash
+harumi roots add ~/Downloads
+harumi scan
+```
+
+ブラウザ履歴は worklog 用の activity event として取り込みます。既定は dry-run で、URL の query string は `--keep-query` を付けない限り保存しません。
+
+```bash
+harumi browser-history sources
+harumi browser-history import --last 7d
+harumi browser-history import --last 7d --execute --confirm IMPORT-BROWSER-HISTORY
+```
+
 環境チェック:
 
 ```bash
