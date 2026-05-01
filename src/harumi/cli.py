@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 from pathlib import Path
 
 from rich.console import Console
@@ -72,9 +73,42 @@ def list_roots_command() -> int:
     return 0
 
 
-def scan_command() -> int:
+def _shorten_path(value: str, max_len: int = 90) -> str:
+    if len(value) <= max_len:
+        return value
+    return "..." + value[-(max_len - 3):]
+
+
+def scan_command(progress_interval: float, progress_percent: float) -> int:
     db_path = _ensure_ready()
-    stats = run_scan(db_path)
+    started_at = time.monotonic()
+    print("Scan progress: estimating scan size...", file=sys.stderr, flush=True)
+
+    def print_progress(stats, processed: int, total: int, current_path: str) -> None:
+        elapsed = int(time.monotonic() - started_at)
+        percent = (processed / total * 100.0) if total else 0.0
+        print(
+            "Scan progress: "
+            f"{processed}/{total or '?'} "
+            f"({percent:.1f}%) "
+            f"elapsed={elapsed}s "
+            f"files={stats.discovered} "
+            f"indexed={stats.indexed} "
+            f"updated={stats.updated} "
+            f"unchanged={stats.unchanged} "
+            f"folders={stats.folders_indexed} "
+            f"failed={stats.failed} "
+            f"current={_shorten_path(current_path)}",
+            file=sys.stderr,
+            flush=True,
+        )
+
+    stats = run_scan(
+        db_path,
+        progress_callback=print_progress,
+        progress_interval_seconds=progress_interval,
+        progress_percent_step=progress_percent,
+    )
     index_counts: dict[str, int] | None = None
     count_error: Exception | None = None
     try:
@@ -310,7 +344,19 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command")
 
     subparsers.add_parser("init", help="Initialize Harumi local storage.")
-    subparsers.add_parser("scan", help="Scan enabled roots and collect file metadata.")
+    scan_parser = subparsers.add_parser("scan", help="Scan enabled roots and collect file metadata.")
+    scan_parser.add_argument(
+        "--progress-interval",
+        type=float,
+        default=600.0,
+        help="Emit scan progress at least every N seconds.",
+    )
+    scan_parser.add_argument(
+        "--progress-percent",
+        type=float,
+        default=1.0,
+        help="Emit scan progress whenever another N percent is completed.",
+    )
     subparsers.add_parser("status", help="Show local dependency and model readiness.")
     regen_parser = subparsers.add_parser(
         "regenerate-summaries",
@@ -347,7 +393,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "init":
         return init_command()
     if args.command == "scan":
-        return scan_command()
+        return scan_command(args.progress_interval, args.progress_percent)
     if args.command == "status":
         return status_command()
     if args.command == "regenerate-summaries":

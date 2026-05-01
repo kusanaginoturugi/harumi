@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 from harumi.config import embedding_enabled, get_log_dir, summary_enabled
 from harumi.db import (
@@ -55,6 +57,9 @@ class ScanStats:
     failed: int = 0
 
 
+ScanProgressCallback = Callable[[ScanStats, int, int, str], None]
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -92,6 +97,15 @@ def _folder_fingerprint(folder_path: Path, dirnames: list[str], filenames: list[
     parts.extend(f"dir:{name}" for name in sorted(dirnames))
     parts.extend(f"file:{name}" for name in sorted(name for name in filenames if not is_ignored_file(folder_path / name)))
     return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
+
+
+def _count_scan_items(root_path: Path) -> int:
+    count = 0
+    for current_root, dirnames, filenames in root_path.walk():
+        dirnames[:] = [name for name in dirnames if not is_ignored_directory(current_root / name)]
+        count += 1
+        count += sum(1 for name in filenames if not is_ignored_file(current_root / name))
+    return count
 
 
 def _index_folder(
@@ -181,17 +195,57 @@ def _index_folder(
     )
 
 
-def run_scan(db_path: Path) -> ScanStats:
+def run_scan(
+    db_path: Path,
+    *,
+    progress_callback: ScanProgressCallback | None = None,
+    progress_interval_seconds: float = 600.0,
+    progress_percent_step: float = 1.0,
+) -> ScanStats:
     _configure_scan_logger()
     stats = ScanStats()
+    percent_progress_enabled = progress_percent_step > 0
     with connect(db_path) as connection:
         roots = get_enabled_roots_with_connection(connection)
+        valid_roots = []
+        total_items = 0
         for root in roots:
             root_path = Path(root["path"])
             if not root_path.exists() or not root_path.is_dir():
                 stats.failed += 1
                 logger.error("Missing or invalid root: %s", root_path)
                 continue
+            valid_roots.append(root)
+            if progress_callback is not None:
+                try:
+                    total_items += _count_scan_items(root_path)
+                except Exception:
+                    logger.exception("Progress estimation failed: %s", root_path)
+
+        processed_items = 0
+        last_progress_time = time.monotonic()
+        next_progress_percent = progress_percent_step
+
+        def maybe_emit_progress(current_path: str, *, force: bool = False) -> None:
+            nonlocal last_progress_time, next_progress_percent
+            if progress_callback is None:
+                return
+
+            now = time.monotonic()
+            percent = (processed_items / total_items * 100.0) if total_items else 0.0
+            should_emit = force or (now - last_progress_time >= progress_interval_seconds)
+            if percent_progress_enabled and total_items and percent >= next_progress_percent:
+                should_emit = True
+                while percent >= next_progress_percent:
+                    next_progress_percent += progress_percent_step
+
+            if should_emit:
+                progress_callback(stats, processed_items, total_items, current_path)
+                last_progress_time = now
+
+        maybe_emit_progress("scan started", force=True)
+        for root in valid_roots:
+            root_path = Path(root["path"])
 
             for current_root, dirnames, filenames in root_path.walk():
                 dirnames[:] = [name for name in dirnames if not is_ignored_directory(current_root / name)]
@@ -210,7 +264,12 @@ def run_scan(db_path: Path) -> ScanStats:
                 except Exception:
                     stats.failed += 1
                     logger.exception("Folder indexing failed: %s", current_root)
+                    processed_items += sum(1 for name in filenames if not is_ignored_file(current_root / name))
+                    maybe_emit_progress(str(current_root))
                     continue
+                finally:
+                    processed_items += 1
+                    maybe_emit_progress(str(current_root))
 
                 for filename in filenames:
                     file_path = current_root / filename
@@ -234,6 +293,8 @@ def run_scan(db_path: Path) -> ScanStats:
                     except Exception:
                         stats.failed += 1
                         logger.exception("File stat/upsert failed: %s", file_path)
+                        processed_items += 1
+                        maybe_emit_progress(str(file_path))
                         continue
 
                     if status == "indexed":
@@ -308,6 +369,11 @@ def run_scan(db_path: Path) -> ScanStats:
                         except Exception:
                             stats.failed += 1
                             logger.exception("File normalization/indexing failed: %s", file_path)
+                            processed_items += 1
+                            maybe_emit_progress(str(file_path))
                             continue
+                    processed_items += 1
+                    maybe_emit_progress(str(file_path))
 
+        maybe_emit_progress("scan complete", force=True)
     return stats
