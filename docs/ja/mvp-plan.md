@@ -67,6 +67,14 @@ harumi scan --root /path/to/root
 harumi find "税金設定のメモ"
 harumi find "スクショをアップロードするスクリプト" --type code
 harumi status
+
+# 作業記録（実装済み）
+harumi worklog                          # 今日の変更ファイルをまとめる
+harumi worklog --date yesterday         # 昨日
+harumi worklog --no-llm                 # ファイル一覧のみ
+harumi retrospect 2026                  # 年単位
+harumi retrospect 202604                # 月単位
+harumi retrospect 20260430              # 日単位
 ```
 
 ## 機能要件

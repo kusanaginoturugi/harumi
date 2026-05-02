@@ -99,6 +99,21 @@ harumi find "script that uploads screenshots to cloud"
 harumi find "where is the travel folder"
 ```
 
+Use Downloads as normal indexed files:
+
+```bash
+harumi roots add ~/Downloads
+harumi scan
+```
+
+Import browser history as worklog activity events. This is dry-run by default and strips URL query strings unless `--keep-query` is set:
+
+```bash
+harumi browser-history sources
+harumi browser-history import --last 7d
+harumi browser-history import --last 7d --execute --confirm IMPORT-BROWSER-HISTORY
+```
+
 Check local readiness:
 
 ```bash
