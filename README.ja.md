@@ -15,15 +15,19 @@ Harumi は、ローカル PC 上のファイルを索引化し、要約と埋め
 ## クイックスタート
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -U pip
-pip install -e .
-pip install -U "markitdown[pdf,docx,pptx,xlsx,xls]"
+scripts/install.sh
 harumi init
 harumi roots add ~/Documents
 harumi scan
 harumi find "最近の旅行書類"
+```
+
+インストールスクリプトは、リポジトリ内に `.venv` を作り、Harumi を editable install し、推奨の MarkItDown PDF/Office extras を入れたうえで、`~/.local/bin/harumi` へリンクを作ります。
+
+`~/.local/bin` が `PATH` に入っていない場合は、シェル設定に次を追加します。
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
 ```
 
 ## 前提
@@ -45,6 +49,16 @@ ollama pull embeddinggemma
 Harumi 用の推奨 MarkItDown セットアップ:
 
 ```bash
+pip install -U "markitdown[pdf,docx,pptx,xlsx,xls]"
+```
+
+`scripts/install.sh` を使わずに手動で入れる場合:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -U pip
+pip install -e .
 pip install -U "markitdown[pdf,docx,pptx,xlsx,xls]"
 ```
 

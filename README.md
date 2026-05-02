@@ -17,15 +17,19 @@ Current status:
 ## Quick start
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -U pip
-pip install -e .
-pip install -U "markitdown[pdf,docx,pptx,xlsx,xls]"
+scripts/install.sh
 harumi init
 harumi roots add ~/Documents
 harumi scan
 harumi find "recent travel document"
+```
+
+The install script creates a local virtualenv, installs Harumi from the source checkout, installs the recommended MarkItDown PDF/Office extras, and links `harumi` into `~/.local/bin`.
+
+If `~/.local/bin` is not in your `PATH`, add this to your shell config:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
 ```
 
 ## Requirements
@@ -45,6 +49,16 @@ ollama pull embeddinggemma
 Recommended MarkItDown setup for Harumi document ingestion:
 
 ```bash
+pip install -U "markitdown[pdf,docx,pptx,xlsx,xls]"
+```
+
+Manual editable install, if you do not use `scripts/install.sh`:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -U pip
+pip install -e .
 pip install -U "markitdown[pdf,docx,pptx,xlsx,xls]"
 ```
 
