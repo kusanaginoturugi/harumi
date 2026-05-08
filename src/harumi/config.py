@@ -16,6 +16,9 @@ FOLDER_SUMMARY_MIN_ITEMS_ENV = "HARUMI_FOLDER_SUMMARY_MIN_ITEMS"
 SUMMARY_LANGUAGE_ENV = "HARUMI_SUMMARY_LANGUAGE"
 EMBED_MODEL_ENV = "HARUMI_EMBED_MODEL"
 EMBED_ENABLED_ENV = "HARUMI_ENABLE_EMBEDDING"
+WORK_HOURS_START_ENV = "HARUMI_WORK_HOURS_START"
+WORK_HOURS_END_ENV = "HARUMI_WORK_HOURS_END"
+WORK_DAYS_ENV = "HARUMI_WORK_DAYS"
 
 # ── config file key metadata ───────────────────────────────────────────────────
 # key → (env_var, python_type, default_value, description)
@@ -28,6 +31,9 @@ CONFIG_SCHEMA: dict[str, tuple[str, type, object, str]] = {
     "summary_min_chars":      (SUMMARY_MIN_CHARS_ENV,       int,  400,             "Minimum chars before summarizing"),
     "summary_code":           (SUMMARY_CODE_ENABLED_ENV,    bool, False,           "Summarize code files"),
     "folder_summary_min_items": (FOLDER_SUMMARY_MIN_ITEMS_ENV, int, 2,            "Min child items to summarize a folder"),
+    "work_hours_start":       (WORK_HOURS_START_ENV,        str,  "09:00",         "Start of work hours for worklog filtering"),
+    "work_hours_end":         (WORK_HOURS_END_ENV,          str,  "18:00",         "End of work hours for worklog filtering"),
+    "work_days":              (WORK_DAYS_ENV,               str,  "mon,tue,wed,thu,fri", "Work days for worklog filtering"),
 }
 
 _config_cache: dict | None = None
@@ -164,3 +170,15 @@ def get_embed_model() -> str:
 
 def embedding_enabled() -> bool:
     return bool(_get_value("embedding_enabled"))
+
+
+def get_work_hours_start() -> str:
+    return str(_get_value("work_hours_start")).strip() or "09:00"
+
+
+def get_work_hours_end() -> str:
+    return str(_get_value("work_hours_end")).strip() or "18:00"
+
+
+def get_work_days() -> str:
+    return str(_get_value("work_days")).strip().lower() or "mon,tue,wed,thu,fri"

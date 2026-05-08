@@ -125,6 +125,35 @@ ON activity_events(event_time);
 
 CREATE INDEX IF NOT EXISTS idx_activity_events_source_time
 ON activity_events(source, event_time);
+
+CREATE TABLE IF NOT EXISTS activity_import_state (
+    source TEXT PRIMARY KEY,
+    last_imported_at REAL NOT NULL DEFAULT 0,
+    last_event_time REAL NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS activity_sessions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source TEXT NOT NULL,
+    session_type TEXT NOT NULL,
+    start_time REAL NOT NULL,
+    end_time REAL NOT NULL,
+    title TEXT NOT NULL DEFAULT '',
+    summary TEXT NOT NULL DEFAULT '',
+    primary_domain TEXT NOT NULL DEFAULT '',
+    event_count INTEGER NOT NULL DEFAULT 0,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    dedupe_key TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_activity_sessions_time
+ON activity_sessions(start_time, end_time);
+
+CREATE INDEX IF NOT EXISTS idx_activity_sessions_source_time
+ON activity_sessions(source, start_time);
 """
 
 
@@ -198,6 +227,35 @@ def _run_migrations(connection: sqlite3.Connection) -> None:
 
         CREATE INDEX IF NOT EXISTS idx_activity_events_source_time
         ON activity_events(source, event_time);
+
+        CREATE TABLE IF NOT EXISTS activity_import_state (
+            source TEXT PRIMARY KEY,
+            last_imported_at REAL NOT NULL DEFAULT 0,
+            last_event_time REAL NOT NULL DEFAULT 0,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS activity_sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source TEXT NOT NULL,
+            session_type TEXT NOT NULL,
+            start_time REAL NOT NULL,
+            end_time REAL NOT NULL,
+            title TEXT NOT NULL DEFAULT '',
+            summary TEXT NOT NULL DEFAULT '',
+            primary_domain TEXT NOT NULL DEFAULT '',
+            event_count INTEGER NOT NULL DEFAULT 0,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            dedupe_key TEXT NOT NULL UNIQUE,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_activity_sessions_time
+        ON activity_sessions(start_time, end_time);
+
+        CREATE INDEX IF NOT EXISTS idx_activity_sessions_source_time
+        ON activity_sessions(source, start_time);
         """
     )
     connection.commit()
@@ -610,11 +668,49 @@ def count_index_stats(db_path: Path) -> dict[str, int]:
             "embeddings": "SELECT COUNT(*) AS count FROM embeddings",
             "folder_embeddings": "SELECT COUNT(*) AS count FROM folder_embeddings",
             "activity_events": "SELECT COUNT(*) AS count FROM activity_events",
+            "activity_sessions": "SELECT COUNT(*) AS count FROM activity_sessions",
         }
         return {
             name: int(connection.execute(sql).fetchone()["count"])
             for name, sql in queries.items()
         }
+
+
+def get_activity_import_state(db_path: Path, source: str) -> sqlite3.Row | None:
+    with connect(db_path) as connection:
+        return connection.execute(
+            """
+            SELECT source, last_imported_at, last_event_time, updated_at
+            FROM activity_import_state
+            WHERE source = ?
+            """,
+            (source,),
+        ).fetchone()
+
+
+def upsert_activity_import_state(
+    db_path: Path,
+    *,
+    source: str,
+    last_imported_at: float,
+    last_event_time: float,
+    connection: sqlite3.Connection | None = None,
+) -> None:
+    manager = nullcontext(connection) if connection is not None else connect(db_path)
+    with manager as connection:
+        connection.execute(
+            """
+            INSERT INTO activity_import_state (source, last_imported_at, last_event_time)
+            VALUES (?, ?, ?)
+            ON CONFLICT(source) DO UPDATE SET
+                last_imported_at = excluded.last_imported_at,
+                last_event_time = MAX(activity_import_state.last_event_time, excluded.last_event_time),
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (source, last_imported_at, last_event_time),
+        )
+        if connection.in_transaction:
+            connection.commit()
 
 
 def upsert_activity_events(
@@ -679,6 +775,115 @@ def query_activity_events_in_range(
             WHERE event_time >= ? AND event_time < ?
               {source_clause}
             ORDER BY event_time DESC
+            LIMIT ?
+            """,
+            tuple(params),
+        )
+        return list(cursor.fetchall())
+
+
+def upsert_activity_sessions(
+    db_path: Path,
+    sessions: list[dict],
+    connection: sqlite3.Connection | None = None,
+) -> int:
+    if not sessions:
+        return 0
+    manager = nullcontext(connection) if connection is not None else connect(db_path)
+    changed = 0
+    with manager as connection:
+        for session in sessions:
+            cursor = connection.execute(
+                """
+                INSERT INTO activity_sessions (
+                    source, session_type, start_time, end_time, title, summary,
+                    primary_domain, event_count, metadata_json, dedupe_key
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(dedupe_key) DO UPDATE SET
+                    end_time = excluded.end_time,
+                    title = excluded.title,
+                    summary = excluded.summary,
+                    primary_domain = excluded.primary_domain,
+                    event_count = excluded.event_count,
+                    metadata_json = excluded.metadata_json,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (
+                    session["source"],
+                    session["session_type"],
+                    session["start_time"],
+                    session["end_time"],
+                    session.get("title", ""),
+                    session.get("summary", ""),
+                    session.get("primary_domain", ""),
+                    session.get("event_count", 0),
+                    session.get("metadata_json", "{}"),
+                    session["dedupe_key"],
+                ),
+            )
+            changed += cursor.rowcount
+        connection.commit()
+    return changed
+
+
+def delete_activity_sessions_in_range(
+    db_path: Path,
+    *,
+    start_ts: float,
+    end_ts: float,
+    source_prefix: str | None = None,
+    connection: sqlite3.Connection | None = None,
+) -> int:
+    manager = nullcontext(connection) if connection is not None else connect(db_path)
+    with manager as connection:
+        params: list[object] = [start_ts, end_ts]
+        source_clause = ""
+        if source_prefix:
+            source_clause = "AND source LIKE ?"
+            params.append(f"{source_prefix}%")
+        cursor = connection.execute(
+            f"""
+            DELETE FROM activity_sessions
+            WHERE start_time >= ? AND start_time < ?
+              {source_clause}
+            """,
+            tuple(params),
+        )
+        connection.commit()
+        return int(cursor.rowcount)
+
+
+def query_activity_sessions_in_range(
+    db_path: Path,
+    *,
+    start_ts: float,
+    end_ts: float,
+    limit: int = 100,
+    source_prefix: str | None = None,
+) -> list[sqlite3.Row]:
+    with connect(db_path) as connection:
+        params: list[object] = [start_ts, end_ts]
+        source_clause = ""
+        if source_prefix:
+            source_clause = "AND source LIKE ?"
+            params.append(f"{source_prefix}%")
+        params.append(limit)
+        cursor = connection.execute(
+            f"""
+            SELECT
+                source,
+                session_type,
+                start_time,
+                end_time,
+                title,
+                summary,
+                primary_domain,
+                event_count,
+                metadata_json
+            FROM activity_sessions
+            WHERE start_time >= ? AND start_time < ?
+              {source_clause}
+            ORDER BY start_time DESC
             LIMIT ?
             """,
             tuple(params),

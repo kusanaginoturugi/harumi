@@ -104,6 +104,7 @@ def info_command() -> int:
     t.add_row("Summarized documents", str(stats["summaries"]), f"{_pct(stats['summaries'], files)} of files")
     t.add_row("Search-ready items", str(stats["embeddings"]), f"{_pct(stats['embeddings'], files)} of files")
     t.add_row("Activity events", str(stats.get("activity_events", 0)), "")
+    t.add_row("Activity sessions", str(stats.get("activity_sessions", 0)), "")
     t.add_row("Last scan", last_scan[:16], "")
     console.print(t)
 

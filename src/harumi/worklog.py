@@ -4,8 +4,14 @@ import sqlite3
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
-from harumi.config import get_summary_language
-from harumi.db import get_db_path, init_db, query_activity_events_in_range, query_files_in_range
+from harumi.config import get_summary_language, get_work_days, get_work_hours_end, get_work_hours_start
+from harumi.db import (
+    get_db_path,
+    init_db,
+    query_activity_events_in_range,
+    query_activity_sessions_in_range,
+    query_files_in_range,
+)
 from harumi.config import ensure_app_dirs
 from harumi.summarize import _run_summary_prompt, get_summary_model
 
@@ -15,6 +21,68 @@ def _local_day_range(d: date) -> tuple[float, float]:
     start = datetime(d.year, d.month, d.day, tzinfo=local_tz)
     end = start + timedelta(days=1)
     return start.timestamp(), end.timestamp()
+
+
+def _parse_hhmm(value: str) -> tuple[int, int]:
+    hour_text, minute_text = value.split(":", 1)
+    hour = int(hour_text)
+    minute = int(minute_text)
+    if hour < 0 or hour > 23 or minute < 0 or minute > 59:
+        raise ValueError
+    return hour, minute
+
+
+def _work_day_numbers() -> set[int]:
+    mapping = {
+        "mon": 0,
+        "tue": 1,
+        "wed": 2,
+        "thu": 3,
+        "fri": 4,
+        "sat": 5,
+        "sun": 6,
+    }
+    return {
+        mapping[token.strip()]
+        for token in get_work_days().split(",")
+        if token.strip() in mapping
+    }
+
+
+def _work_window_for_day(d: date) -> tuple[float, float] | None:
+    if d.weekday() not in _work_day_numbers():
+        return None
+    local_tz = datetime.now(timezone.utc).astimezone().tzinfo
+    try:
+        start_hour, start_minute = _parse_hhmm(get_work_hours_start())
+        end_hour, end_minute = _parse_hhmm(get_work_hours_end())
+    except (ValueError, TypeError):
+        start_hour, start_minute = 9, 0
+        end_hour, end_minute = 18, 0
+    start = datetime(d.year, d.month, d.day, start_hour, start_minute, tzinfo=local_tz)
+    end = datetime(d.year, d.month, d.day, end_hour, end_minute, tzinfo=local_tz)
+    if end <= start:
+        end += timedelta(days=1)
+    return start.timestamp(), end.timestamp()
+
+
+def _effective_day_range(d: date, include_private_time: bool) -> tuple[float, float, str]:
+    if include_private_time:
+        start_ts, end_ts = _local_day_range(d)
+        return start_ts, end_ts, "all day"
+    work_window = _work_window_for_day(d)
+    if work_window is None:
+        start_ts, end_ts = _local_day_range(d)
+        return start_ts, start_ts, "outside configured work days"
+    return work_window[0], work_window[1], f"work hours {get_work_hours_start()}-{get_work_hours_end()}"
+
+
+def _timestamp_in_work_time(ts: float, local_tz) -> bool:
+    local_dt = datetime.fromtimestamp(ts, tz=local_tz)
+    window = _work_window_for_day(local_dt.date())
+    if window is None:
+        return False
+    return window[0] <= ts < window[1]
 
 
 def _parse_date(value: str) -> date:
@@ -57,6 +125,20 @@ def _build_event_lines(rows: list[sqlite3.Row]) -> list[str]:
     return lines
 
 
+def _build_session_lines(rows: list[sqlite3.Row]) -> list[str]:
+    lines = []
+    for row in rows:
+        start = _format_event_time(row["start_time"])
+        end = _format_event_time(row["end_time"])
+        title = row["title"] or row["primary_domain"] or "browser activity"
+        summary = row["summary"] or ""
+        line = f"  {start}-{end}  {title}  ({row['event_count']} visits)"
+        if summary:
+            line += f"\n        {summary}"
+        lines.append(line)
+    return lines
+
+
 def _language_instruction() -> str:
     lang = get_summary_language()
     if lang == "ja":
@@ -66,7 +148,12 @@ def _language_instruction() -> str:
     return f"Respond in {lang} if possible. Summarize in 3-5 concise sentences."
 
 
-def _build_worklog_prompt(date_label: str, rows: list[sqlite3.Row], events: list[sqlite3.Row]) -> str:
+def _build_worklog_prompt(
+    date_label: str,
+    rows: list[sqlite3.Row],
+    events: list[sqlite3.Row],
+    sessions: list[sqlite3.Row],
+) -> str:
     file_block = "\n".join(
         f"- {row['path']}" + (f"\n  {row['summary_short']}" if row["summary_short"] else "")
         for row in rows
@@ -75,13 +162,19 @@ def _build_worklog_prompt(date_label: str, rows: list[sqlite3.Row], events: list
         f"- {row['title'] or '(no title)'}\n  {row['url']}"
         for row in events
     )
+    session_block = "\n".join(
+        f"- {_format_event_time(row['start_time'])}-{_format_event_time(row['end_time'])} "
+        f"{row['title'] or row['primary_domain']}\n  {row['summary']}"
+        for row in sessions
+    )
     return (
         f"{_language_instruction()}\n\n"
-        f"以下は {date_label} の変更ファイルとブラウザ閲覧履歴です。\n"
+        f"以下は {date_label} の変更ファイル、ブラウザ閲覧セッション、補助的な閲覧履歴です。\n"
         "これらの情報からその日の作業内容を 3〜5 文でまとめてください。\n"
         "技術的な詳細よりも「何に取り組んでいたか」を重視してください。\n\n"
         f"ファイル一覧:\n{file_block}\n\n"
-        f"ブラウザ履歴:\n{event_block}"
+        f"ブラウザ閲覧セッション:\n{session_block}\n\n"
+        f"補助的なブラウザ履歴:\n{event_block}"
     )
 
 
@@ -89,6 +182,7 @@ def _build_retrospect_prompt(
     from_label: str,
     to_label: str,
     day_blocks: list[tuple[str, list[sqlite3.Row], list[sqlite3.Row]]],
+    session_blocks: list[tuple[str, list[sqlite3.Row]]],
 ) -> str:
     block_text = ""
     for day_label, rows, events in day_blocks:
@@ -100,6 +194,13 @@ def _build_retrospect_prompt(
             block_text += "\n"
         for row in events:
             block_text += f"- browser: {row['title'] or '(no title)'}\n  {row['url']}\n"
+    for day_label, sessions in session_blocks:
+        block_text += f"\n【{day_label} browser sessions】\n"
+        for row in sessions:
+            block_text += (
+                f"- {_format_event_time(row['start_time'])}-{_format_event_time(row['end_time'])} "
+                f"{row['title'] or row['primary_domain']}\n  {row['summary']}\n"
+            )
     return (
         f"{_language_instruction()}\n\n"
         f"以下は {from_label} から {to_label} の期間に変更されたファイルとブラウザ閲覧履歴です。\n"
@@ -112,6 +213,7 @@ def _print_worklog(
     date_label: str,
     rows: list[sqlite3.Row],
     events: list[sqlite3.Row],
+    sessions: list[sqlite3.Row],
     summary: str | None,
     output: str,
 ) -> None:
@@ -125,8 +227,16 @@ def _print_worklog(
             print(f"- `{row['path']}` ({time_str})")
             if row["summary_short"]:
                 print(f"  - {row['summary_short']}")
+        if sessions:
+            print(f"\n### ブラウザ閲覧セッション ({len(sessions)}件)\n")
+            for row in sessions:
+                start = _format_event_time(row["start_time"])
+                end = _format_event_time(row["end_time"])
+                print(f"- {row['title'] or row['primary_domain']} ({start}-{end}, {row['event_count']} visits)")
+                if row["summary"]:
+                    print(f"  - {row['summary']}")
         if events:
-            print(f"\n### ブラウザ履歴 ({len(events)}件)\n")
+            print(f"\n### 補助的なブラウザ履歴 ({len(events)}件)\n")
             for row in events:
                 time_str = _format_event_time(row["event_time"])
                 print(f"- {row['title'] or '(no title)'} ({time_str})")
@@ -135,15 +245,21 @@ def _print_worklog(
         print(f"=== {date_label} の作業記録 ===\n")
         if summary:
             print(summary)
-            print()
+        print()
         print(f"変更ファイル: {len(rows)}件")
+        print(f"ブラウザ閲覧セッション: {len(sessions)}件")
         print(f"ブラウザ履歴: {len(events)}件")
         print()
         for line in _build_file_lines(rows):
             print(line)
+        if sessions:
+            print()
+            print("--- ブラウザ閲覧セッション ---")
+            for line in _build_session_lines(sessions):
+                print(line)
         if events:
             print()
-            print("--- ブラウザ履歴 ---")
+            print("--- 補助的なブラウザ履歴 ---")
             for line in _build_event_lines(events):
                 print(line)
 
@@ -153,6 +269,7 @@ def worklog_command(
     output: str,
     limit: int,
     no_llm: bool,
+    include_private_time: bool,
 ) -> int:
     try:
         target = _parse_date(date_str)
@@ -163,7 +280,7 @@ def worklog_command(
     db_path = get_db_path(ensure_app_dirs())
     init_db(db_path)
 
-    start_ts, end_ts = _local_day_range(target)
+    start_ts, end_ts, range_label = _effective_day_range(target, include_private_time)
     rows = query_files_in_range(db_path, start_ts=start_ts, end_ts=end_ts, limit=limit)
     events = query_activity_events_in_range(
         db_path,
@@ -172,23 +289,31 @@ def worklog_command(
         limit=limit,
         source_prefix="browser:",
     )
+    sessions = query_activity_sessions_in_range(
+        db_path,
+        start_ts=start_ts,
+        end_ts=end_ts,
+        limit=limit,
+        source_prefix="browser:",
+    )
+    prompt_events = [] if sessions else events
 
     date_label = target.isoformat()
 
-    if not rows and not events:
-        print(f"{date_label} の活動はありません（インデックス済みの範囲内）。")
+    if not rows and not events and not sessions:
+        print(f"{date_label} の活動はありません（{range_label} / インデックス済みの範囲内）。")
         return 0
 
     summary: str | None = None
     if not no_llm:
         try:
-            prompt = _build_worklog_prompt(date_label, rows, events)
+            prompt = _build_worklog_prompt(date_label, rows, prompt_events, sessions)
             model = get_summary_model()
             summary = _run_summary_prompt(model, prompt[:8000])
         except Exception as exc:
             print(f"[警告] LLM によるサマリー生成に失敗しました: {exc}")
 
-    _print_worklog(date_label, rows, events, summary, output)
+    _print_worklog(f"{date_label} ({range_label})", rows, events, sessions, summary, output)
     return 0
 
 
@@ -227,6 +352,7 @@ def retrospect_command(
     output: str,
     limit: int,
     no_llm: bool,
+    include_private_time: bool,
 ) -> int:
     try:
         start_ts, end_ts, label = _parse_period(period)
@@ -245,11 +371,18 @@ def retrospect_command(
         limit=limit,
         source_prefix="browser:",
     )
+    sessions = query_activity_sessions_in_range(
+        db_path,
+        start_ts=start_ts,
+        end_ts=end_ts,
+        limit=limit,
+        source_prefix="browser:",
+    )
 
     from_label = label
     to_label = label
 
-    if not rows and not events:
+    if not rows and not events and not sessions:
         print(f"{label} の活動はありません（インデックス済みの範囲内）。")
         return 0
 
@@ -258,19 +391,34 @@ def retrospect_command(
     local_tz = datetime.now(timezone.utc).astimezone().tzinfo
     for row in rows:
         d = datetime.fromtimestamp(row["mtime"], tz=local_tz).date()
+        if not include_private_time and not _timestamp_in_work_time(float(row["mtime"]), local_tz):
+            continue
         day_blocks.setdefault(d, []).append(row)
     event_day_blocks: dict[date, list[sqlite3.Row]] = {}
     for row in events:
         d = datetime.fromtimestamp(row["event_time"], tz=local_tz).date()
+        if not include_private_time and not _timestamp_in_work_time(float(row["event_time"]), local_tz):
+            continue
         event_day_blocks.setdefault(d, []).append(row)
+    session_day_blocks: dict[date, list[sqlite3.Row]] = {}
+    for row in sessions:
+        d = datetime.fromtimestamp(row["start_time"], tz=local_tz).date()
+        if not include_private_time and not _timestamp_in_work_time(float(row["start_time"]), local_tz):
+            continue
+        session_day_blocks.setdefault(d, []).append(row)
 
-    sorted_days = sorted(set(day_blocks.keys()) | set(event_day_blocks.keys()))
+    sorted_days = sorted(set(day_blocks.keys()) | set(event_day_blocks.keys()) | set(session_day_blocks.keys()))
+
+    if not sorted_days:
+        print(f"{label} の勤務時間内の活動はありません（インデックス済みの範囲内）。")
+        return 0
 
     summary: str | None = None
     if not no_llm:
         try:
             blocks = [(d.isoformat(), day_blocks.get(d, []), event_day_blocks.get(d, [])) for d in sorted_days]
-            prompt = _build_retrospect_prompt(label, label, blocks)
+            session_blocks = [(d.isoformat(), session_day_blocks.get(d, [])) for d in sorted_days]
+            prompt = _build_retrospect_prompt(label, label, blocks, session_blocks)
             model = get_summary_model()
             summary = _run_summary_prompt(model, prompt[:8000])
         except Exception as exc:
@@ -283,7 +431,8 @@ def retrospect_command(
         for d in sorted_days:
             d_rows = day_blocks.get(d, [])
             d_events = event_day_blocks.get(d, [])
-            print(f"### {d.isoformat()} ({len(d_rows)} files / {len(d_events)} browser)\n")
+            d_sessions = session_day_blocks.get(d, [])
+            print(f"### {d.isoformat()} ({len(d_rows)} files / {len(d_sessions)} sessions / {len(d_events)} browser)\n")
             for row in d_rows:
                 time_str = _format_mtime(row["mtime"])
                 print(f"- `{row['path']}` ({time_str})")
@@ -293,6 +442,12 @@ def retrospect_command(
                 time_str = _format_event_time(row["event_time"])
                 print(f"- browser: {row['title'] or '(no title)'} ({time_str})")
                 print(f"  - {row['url']}")
+            for row in d_sessions:
+                start = _format_event_time(row["start_time"])
+                end = _format_event_time(row["end_time"])
+                print(f"- browser session: {row['title'] or row['primary_domain']} ({start}-{end}, {row['event_count']} visits)")
+                if row["summary"]:
+                    print(f"  - {row['summary']}")
             print()
     else:
         print(f"=== {label} の作業履歴 ===\n")
@@ -302,9 +457,14 @@ def retrospect_command(
         for d in sorted_days:
             d_rows = day_blocks.get(d, [])
             d_events = event_day_blocks.get(d, [])
-            print(f"--- {d.isoformat()} ({len(d_rows)} files / {len(d_events)} browser) ---")
+            d_sessions = session_day_blocks.get(d, [])
+            print(f"--- {d.isoformat()} ({len(d_rows)} files / {len(d_sessions)} sessions / {len(d_events)} browser) ---")
             for line in _build_file_lines(d_rows):
                 print(line)
+            if d_sessions:
+                print("  [browser sessions]")
+                for line in _build_session_lines(d_sessions):
+                    print(line)
             if d_events:
                 print("  [browser]")
                 for line in _build_event_lines(d_events):

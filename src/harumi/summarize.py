@@ -15,6 +15,10 @@ from harumi.config import (
 
 PROMPT_VERSION = "v1"
 ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
+THINK_TAG_RE = re.compile(r"(?is)<think>.*?</think>")
+LEADING_THINKING_RE = re.compile(
+    r"(?is)^\s*thinking\.\.\..*?(?:done thinking\.|done)\s*"
+)
 CODE_EXTENSIONS = {
     ".py",
     ".js",
@@ -91,6 +95,8 @@ def _clean_ollama_output(text: str) -> str:
             cleaned = cleaned.replace("\b", "")
             continue
         cleaned = cleaned[: backspace_index - 1] + cleaned[backspace_index + 1 :]
+    cleaned = THINK_TAG_RE.sub("", cleaned)
+    cleaned = LEADING_THINKING_RE.sub("", cleaned)
     return " ".join(cleaned.split())
 
 

@@ -6,6 +6,7 @@ import unittest
 from harumi.summarize import (
     build_folder_summary_prompt,
     build_summary_prompt,
+    _clean_ollama_output,
     should_summarize_folder,
     should_summarize_text,
 )
@@ -103,6 +104,20 @@ class SummarizePolicyTests(unittest.TestCase):
                 os.environ.pop("HARUMI_SUMMARY_LANGUAGE", None)
             else:
                 os.environ["HARUMI_SUMMARY_LANGUAGE"] = old_value
+
+    def test_clean_output_removes_leading_thinking_trace(self) -> None:
+        raw = (
+            "Thinking... internal reasoning that should not be shown. "
+            "...done thinking. 今日は Harumi の作業履歴機能を改善しました。"
+        )
+        self.assertEqual(
+            _clean_ollama_output(raw),
+            "今日は Harumi の作業履歴機能を改善しました。",
+        )
+
+    def test_clean_output_removes_think_tags(self) -> None:
+        raw = "<think>hidden reasoning</think> 表示する本文です。"
+        self.assertEqual(_clean_ollama_output(raw), "表示する本文です。")
 
 
 if __name__ == "__main__":

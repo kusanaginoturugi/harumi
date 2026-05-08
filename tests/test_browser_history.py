@@ -4,17 +4,35 @@ import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from harumi.browser_history import (
     CHROME_EPOCH_OFFSET_SECONDS,
     BrowserHistorySource,
+    discover_browser_history_sources,
     import_browser_history,
     parse_date_range,
 )
 from harumi.db import init_db, query_activity_events_in_range
+from harumi.db import get_activity_import_state, query_activity_sessions_in_range
 
 
 class BrowserHistoryTests(unittest.TestCase):
+    def test_discovers_firefox_under_config_mozilla(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            home = Path(tmpdir)
+            profile = home / ".config" / "mozilla" / "firefox" / "abc.default-release"
+            profile.mkdir(parents=True)
+            (profile / "places.sqlite").write_text("", encoding="utf-8")
+
+            with patch("pathlib.Path.home", return_value=home):
+                sources = discover_browser_history_sources()
+
+            self.assertEqual(len(sources), 1)
+            self.assertEqual(sources[0].browser, "firefox")
+            self.assertEqual(sources[0].kind, "firefox")
+            self.assertEqual(sources[0].profile, "abc.default-release")
+
     def test_parse_date_range_prefers_explicit_dates_over_last(self) -> None:
         start_ts, end_ts, label = parse_date_range("2026-04-01", "2026-04-02", "7d")
         self.assertIn("2026-04-01", label)
@@ -96,6 +114,53 @@ class BrowserHistoryTests(unittest.TestCase):
 
             self.assertEqual(stats.visits_after_filters, 0)
             self.assertEqual(stats.imported, 0)
+
+    def test_import_updates_state_and_builds_sessions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            history_db = tmp / "History"
+            app_db = tmp / "harumi.db"
+            init_db(app_db)
+            self._create_chromium_history(history_db)
+            source = BrowserHistorySource(
+                browser="chromium",
+                profile="Default",
+                kind="chromium",
+                path=history_db,
+            )
+
+            start_ts, end_ts, _ = parse_date_range("2026-04-01", "2026-04-01", None)
+            stats = import_browser_history(
+                app_db,
+                sources=[source],
+                start_ts=start_ts,
+                end_ts=end_ts,
+                execute=True,
+                limit_per_source=100,
+                rebuild_sessions=True,
+            )
+
+            state = get_activity_import_state(app_db, "browser:chromium:Default")
+            sessions = query_activity_sessions_in_range(app_db, start_ts=start_ts, end_ts=end_ts)
+
+            self.assertEqual(stats.imported, 1)
+            self.assertIsNotNone(state)
+            self.assertGreater(state["last_event_time"], 0)
+            self.assertEqual(len(sessions), 1)
+            self.assertEqual(sessions[0]["session_type"], "browser")
+            self.assertEqual(sessions[0]["primary_domain"], "example.com")
+
+            second_stats = import_browser_history(
+                app_db,
+                sources=[source],
+                start_ts=start_ts,
+                end_ts=end_ts,
+                execute=True,
+                limit_per_source=100,
+                since_last=True,
+            )
+            self.assertEqual(second_stats.visits_seen, 0)
+            self.assertEqual(second_stats.imported, 0)
 
     def _create_chromium_history(self, path: Path) -> None:
         event_ts = 1775001600.0  # 2026-04-01T00:00:00Z

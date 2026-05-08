@@ -203,6 +203,8 @@ def browser_history_import_command(
     from_date: str | None,
     to_date: str | None,
     last: str | None,
+    since_last: bool,
+    no_sessions: bool,
     execute: bool,
     confirm: str | None,
     keep_query: bool,
@@ -238,9 +240,11 @@ def browser_history_import_command(
 
     print("Sensitive operation: browser-history import")
     print(f"Range: {range_label}")
+    print(f"Incremental mode: {'on' if since_last else 'off'}")
     print(f"Sources: {len(sources)}")
     print(f"URL query/fragment redaction: {'off' if keep_query else 'on'}")
     print(f"Title redaction: {'on' if redact_title else 'off'}")
+    print(f"Session rebuild: {'off' if no_sessions else 'on'}")
     if include_domain:
         print(f"Include domains: {', '.join(include_domain)}")
     if exclude_domain:
@@ -260,6 +264,8 @@ def browser_history_import_command(
         include_domains=include_domain,
         exclude_domains=exclude_domain,
         limit_per_source=limit,
+        since_last=since_last,
+        rebuild_sessions=not no_sessions,
     )
 
     print()
@@ -272,6 +278,8 @@ def browser_history_import_command(
         return 0
 
     print(f"Imported new events: {stats.imported}")
+    print(f"Browser sessions rebuilt: {stats.sessions_rebuilt}")
+    print(f"Session rows changed: {stats.session_rows_changed}")
     return 0
 
 
@@ -488,6 +496,8 @@ def build_parser() -> argparse.ArgumentParser:
     browser_import_parser.add_argument("--from", dest="from_date")
     browser_import_parser.add_argument("--to", dest="to_date")
     browser_import_parser.add_argument("--last", default="7d", help="Relative range such as 24h, 7d, or 30d.")
+    browser_import_parser.add_argument("--since-last", action="store_true", help="Import only visits newer than each source's last imported visit.")
+    browser_import_parser.add_argument("--no-sessions", action="store_true", help="Do not rebuild browser activity sessions after import.")
     browser_import_parser.add_argument("--execute", action="store_true")
     browser_import_parser.add_argument("--confirm")
     browser_import_parser.add_argument("--keep-query", action="store_true", help="Store full URLs including query strings.")
@@ -525,6 +535,7 @@ def build_parser() -> argparse.ArgumentParser:
     worklog_parser.add_argument("--output", choices=("text", "markdown"), default="text")
     worklog_parser.add_argument("--limit", type=int, default=50)
     worklog_parser.add_argument("--no-llm", action="store_true", help="Skip LLM synthesis; show file list only.")
+    worklog_parser.add_argument("--include-private-time", action="store_true", help="Include activity outside configured work hours.")
 
     retrospect_parser = subparsers.add_parser("retrospect", help="Retrospect work for a year, month, or day.")
     retrospect_parser.add_argument(
@@ -534,6 +545,7 @@ def build_parser() -> argparse.ArgumentParser:
     retrospect_parser.add_argument("--output", choices=("text", "markdown"), default="text")
     retrospect_parser.add_argument("--limit", type=int, default=100)
     retrospect_parser.add_argument("--no-llm", action="store_true", help="Skip LLM synthesis; show file list only.")
+    retrospect_parser.add_argument("--include-private-time", action="store_true", help="Include activity outside configured work hours.")
 
     config_parser = subparsers.add_parser("config", help="Manage persistent configuration.")
     config_subparsers = config_parser.add_subparsers(dest="config_command")
@@ -570,6 +582,8 @@ def main(argv: list[str] | None = None) -> int:
                 args.from_date,
                 args.to_date,
                 args.last,
+                args.since_last,
+                args.no_sessions,
                 args.execute,
                 args.confirm,
                 args.keep_query,
@@ -600,6 +614,7 @@ def main(argv: list[str] | None = None) -> int:
             args.output,
             args.limit,
             args.no_llm,
+            args.include_private_time,
         )
     if args.command == "retrospect":
         return retrospect_command(
@@ -607,6 +622,7 @@ def main(argv: list[str] | None = None) -> int:
             args.output,
             args.limit,
             args.no_llm,
+            args.include_private_time,
         )
     if args.command == "config":
         if args.config_command == "set":

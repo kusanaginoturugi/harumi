@@ -126,6 +126,18 @@ Import browser history as worklog activity events. This is dry-run by default an
 harumi browser-history sources
 harumi browser-history import --last 7d
 harumi browser-history import --last 7d --execute --confirm IMPORT-BROWSER-HISTORY
+harumi browser-history import --since-last --execute --confirm IMPORT-BROWSER-HISTORY
+```
+
+Imported browser visits are stored as raw activity events and compressed into browser activity sessions for `harumi worklog` / `harumi retrospect`.
+Harumi intentionally does not inspect sandboxed Snap or Flatpak browser profile directories; those installations are treated as isolated app data.
+
+`worklog` and `retrospect` show configured work hours by default, so private-time browsing stays out of normal reports. Configure the window with `work_hours_start`, `work_hours_end`, and `work_days`, and use `--include-private-time` when you explicitly want the full day:
+
+```bash
+harumi config set work_hours_start 09:00
+harumi config set work_hours_end 18:00
+harumi worklog --include-private-time
 ```
 
 Check local readiness:

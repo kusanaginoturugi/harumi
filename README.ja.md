@@ -125,6 +125,18 @@ harumi scan
 harumi browser-history sources
 harumi browser-history import --last 7d
 harumi browser-history import --last 7d --execute --confirm IMPORT-BROWSER-HISTORY
+harumi browser-history import --since-last --execute --confirm IMPORT-BROWSER-HISTORY
+```
+
+取り込んだブラウザ履歴は生の activity event として保存し、`harumi worklog` / `harumi retrospect` で使いやすいようにブラウザ閲覧セッションへ圧縮します。
+Harumi は Snap / Flatpak 版ブラウザのサンドボックス化されたプロファイルディレクトリは意図的に参照しません。それらは独立したアプリデータとして扱います。
+
+`worklog` と `retrospect` は既定で設定された勤務時間内だけを表示します。私用時間のブラウザ履歴は通常のレポートには出しません。勤務時間は `work_hours_start`、`work_hours_end`、`work_days` で設定し、明示的に全時間帯を見たい場合だけ `--include-private-time` を使います。
+
+```bash
+harumi config set work_hours_start 09:00
+harumi config set work_hours_end 18:00
+harumi worklog --include-private-time
 ```
 
 環境チェック:
