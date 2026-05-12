@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from harumi.db import get_db_path, init_db, insert_root
+from harumi.db import count_index_stats, get_db_path, init_db, insert_root
 from harumi.scanner import run_scan
 
 
@@ -47,6 +47,46 @@ class ScannerTests(unittest.TestCase):
                 self.assertEqual(events[0][0], 0)
                 self.assertEqual(events[-1][0], events[-1][1])
                 self.assertGreater(events[-1][1], 0)
+        finally:
+            if old_summary is None:
+                os.environ.pop("HARUMI_ENABLE_SUMMARY", None)
+            else:
+                os.environ["HARUMI_ENABLE_SUMMARY"] = old_summary
+            if old_embedding is None:
+                os.environ.pop("HARUMI_ENABLE_EMBEDDING", None)
+            else:
+                os.environ["HARUMI_ENABLE_EMBEDDING"] = old_embedding
+
+    def test_scan_respects_harumiignore_patterns(self) -> None:
+        old_summary = os.environ.get("HARUMI_ENABLE_SUMMARY")
+        old_embedding = os.environ.get("HARUMI_ENABLE_EMBEDDING")
+        os.environ["HARUMI_ENABLE_SUMMARY"] = "0"
+        os.environ["HARUMI_ENABLE_EMBEDDING"] = "0"
+        try:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                base = Path(tmpdir)
+                root = base / "workspace"
+                root.mkdir()
+                (root / ".harumiignore").write_text("vendor/\n*.log\n", encoding="utf-8")
+                (root / "note.txt").write_text("keep me\n", encoding="utf-8")
+                vendor_dir = root / "vendor" / "bundle"
+                vendor_dir.mkdir(parents=True)
+                (vendor_dir / "gem.txt").write_text("ignore me\n", encoding="utf-8")
+                (root / "debug.log").write_text("ignore me too\n", encoding="utf-8")
+
+                db_path = get_db_path(base / "app")
+                init_db(db_path)
+                insert_root(db_path, root)
+                log_dir = base / "logs"
+                log_dir.mkdir()
+
+                with patch("harumi.scanner.get_log_dir", return_value=log_dir):
+                    stats = run_scan(db_path)
+
+                counts = count_index_stats(db_path)
+                self.assertEqual(stats.discovered, 1)
+                self.assertGreaterEqual(stats.ignored, 2)
+                self.assertEqual(counts["files"], 1)
         finally:
             if old_summary is None:
                 os.environ.pop("HARUMI_ENABLE_SUMMARY", None)

@@ -120,6 +120,16 @@ harumi roots add ~/Downloads
 harumi scan
 ```
 
+Project-specific scan exclusions can be defined with `.harumiignore` at the root of each indexed directory.
+
+```gitignore
+# .harumiignore
+vendor/
+gems/
+*.log
+tmp/
+```
+
 Import browser history as worklog activity events. This is dry-run by default and strips URL query strings unless `--keep-query` is set:
 
 ```bash

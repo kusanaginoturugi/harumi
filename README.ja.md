@@ -119,6 +119,16 @@ harumi roots add ~/Downloads
 harumi scan
 ```
 
+プロジェクト単位の除外は、索引ルート直下の `.harumiignore` で定義できます。
+
+```gitignore
+# .harumiignore
+vendor/
+gems/
+*.log
+tmp/
+```
+
 ブラウザ履歴は worklog 用の activity event として取り込みます。既定は dry-run で、URL の query string は `--keep-query` を付けない限り保存しません。
 
 ```bash

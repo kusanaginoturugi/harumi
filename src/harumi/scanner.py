@@ -22,7 +22,7 @@ from harumi.db import (
     upsert_summary,
 )
 from harumi.embed import embed_text
-from harumi.ignore_rules import is_ignored_directory, is_ignored_file
+from harumi.ignore_rules import IgnoreMatcher, is_ignored_directory, is_ignored_file, load_ignore_matcher
 from harumi.normalize import normalize_file
 from harumi.summarize import (
     PROMPT_VERSION,
@@ -73,7 +73,7 @@ def _configure_scan_logger() -> None:
     logger.addHandler(handler)
 
 
-def _build_folder_child_descriptions(folder_path: Path) -> str:
+def _build_folder_child_descriptions(folder_path: Path, matcher: IgnoreMatcher) -> str:
     child_lines: list[str] = []
     try:
         entries = sorted(folder_path.iterdir(), key=lambda path: path.name.lower())
@@ -84,7 +84,7 @@ def _build_folder_child_descriptions(folder_path: Path) -> str:
         if entry.is_dir():
             child_lines.append(f"folder: {entry.name}")
             continue
-        if is_ignored_file(entry):
+        if is_ignored_file(entry, matcher):
             continue
         suffix = entry.suffix.lower() or "(no extension)"
         child_lines.append(f"file: {entry.name} ({suffix})")
@@ -92,19 +92,26 @@ def _build_folder_child_descriptions(folder_path: Path) -> str:
     return "\n".join(child_lines)
 
 
-def _folder_fingerprint(folder_path: Path, dirnames: list[str], filenames: list[str]) -> str:
+def _folder_fingerprint(
+    folder_path: Path, dirnames: list[str], filenames: list[str], matcher: IgnoreMatcher
+) -> str:
     parts: list[str] = [str(folder_path)]
     parts.extend(f"dir:{name}" for name in sorted(dirnames))
-    parts.extend(f"file:{name}" for name in sorted(name for name in filenames if not is_ignored_file(folder_path / name)))
+    parts.extend(
+        f"file:{name}"
+        for name in sorted(name for name in filenames if not is_ignored_file(folder_path / name, matcher))
+    )
     return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
 
 
-def _count_scan_items(root_path: Path) -> int:
+def _count_scan_items(root_path: Path, matcher: IgnoreMatcher) -> int:
     count = 0
     for current_root, dirnames, filenames in root_path.walk():
-        dirnames[:] = [name for name in dirnames if not is_ignored_directory(current_root / name)]
+        dirnames[:] = [
+            name for name in dirnames if not is_ignored_directory(current_root / name, matcher)
+        ]
         count += 1
-        count += sum(1 for name in filenames if not is_ignored_file(current_root / name))
+        count += sum(1 for name in filenames if not is_ignored_file(current_root / name, matcher))
     return count
 
 
@@ -117,25 +124,26 @@ def _index_folder(
     filenames: list[str],
     stats: ScanStats,
     connection,
+    matcher: IgnoreMatcher,
 ) -> None:
     latest_mtime = 0.0
     for name in filenames:
         candidate = folder_path / name
-        if is_ignored_file(candidate):
+        if is_ignored_file(candidate, matcher):
             continue
         try:
             latest_mtime = max(latest_mtime, candidate.stat().st_mtime)
         except OSError:
             continue
 
-    fingerprint = _folder_fingerprint(folder_path, dirnames, filenames)
+    fingerprint = _folder_fingerprint(folder_path, dirnames, filenames, matcher)
     folder_id, folder_changed = upsert_folder_record(
         db_path,
         root_id=root_id,
         path=str(folder_path),
         parent_path=str(folder_path.parent),
         folder_name=folder_path.name,
-        file_count=len([name for name in filenames if not is_ignored_file(folder_path / name)]),
+        file_count=len([name for name in filenames if not is_ignored_file(folder_path / name, matcher)]),
         child_folder_count=len(dirnames),
         latest_mtime=latest_mtime,
         content_fingerprint=fingerprint,
@@ -143,7 +151,7 @@ def _index_folder(
     )
     stats.folders_indexed += 1
 
-    child_descriptions = _build_folder_child_descriptions(folder_path)
+    child_descriptions = _build_folder_child_descriptions(folder_path, matcher)
     if not child_descriptions:
         return
     if not folder_changed:
@@ -218,7 +226,7 @@ def run_scan(
             valid_roots.append(root)
             if progress_callback is not None:
                 try:
-                    total_items += _count_scan_items(root_path)
+                    total_items += _count_scan_items(root_path, load_ignore_matcher(root_path))
                 except Exception:
                     logger.exception("Progress estimation failed: %s", root_path)
 
@@ -246,10 +254,17 @@ def run_scan(
         maybe_emit_progress("scan started", force=True)
         for root in valid_roots:
             root_path = Path(root["path"])
+            ignore_matcher = load_ignore_matcher(root_path)
 
             for current_root, dirnames, filenames in root_path.walk():
-                dirnames[:] = [name for name in dirnames if not is_ignored_directory(current_root / name)]
-                stats.ignored += len([name for name in filenames if is_ignored_file(current_root / name)])
+                dirnames[:] = [
+                    name
+                    for name in dirnames
+                    if not is_ignored_directory(current_root / name, ignore_matcher)
+                ]
+                stats.ignored += len(
+                    [name for name in filenames if is_ignored_file(current_root / name, ignore_matcher)]
+                )
 
                 try:
                     _index_folder(
@@ -260,11 +275,16 @@ def run_scan(
                         filenames=filenames,
                         stats=stats,
                         connection=connection,
+                        matcher=ignore_matcher,
                     )
                 except Exception:
                     stats.failed += 1
                     logger.exception("Folder indexing failed: %s", current_root)
-                    processed_items += sum(1 for name in filenames if not is_ignored_file(current_root / name))
+                    processed_items += sum(
+                        1
+                        for name in filenames
+                        if not is_ignored_file(current_root / name, ignore_matcher)
+                    )
                     maybe_emit_progress(str(current_root))
                     continue
                 finally:
@@ -273,7 +293,7 @@ def run_scan(
 
                 for filename in filenames:
                     file_path = current_root / filename
-                    if is_ignored_file(file_path):
+                    if is_ignored_file(file_path, ignore_matcher):
                         continue
 
                     stats.discovered += 1
