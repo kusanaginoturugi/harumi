@@ -120,9 +120,19 @@ def _build_event_lines(rows: list[sqlite3.Row]) -> list[str]:
     for row in rows:
         time_str = _format_event_time(row["event_time"])
         title = row["title"] or "(no title)"
-        url = row["url"]
-        lines.append(f"  {time_str}  {title}\n        {url}")
+        detail = _event_detail(row)
+        line = f"  {time_str}  {title}"
+        if detail:
+            line += f"\n        {detail}"
+        lines.append(line)
     return lines
+
+
+def _event_detail(row: sqlite3.Row) -> str:
+    source = row["source"] or ""
+    if str(source).startswith("ai:"):
+        return ""
+    return row["url"] or row["path"] or source
 
 
 def _build_session_lines(rows: list[sqlite3.Row]) -> list[str]:
@@ -130,9 +140,10 @@ def _build_session_lines(rows: list[sqlite3.Row]) -> list[str]:
     for row in rows:
         start = _format_event_time(row["start_time"])
         end = _format_event_time(row["end_time"])
-        title = row["title"] or row["primary_domain"] or "browser activity"
+        title = row["title"] or row["primary_domain"] or "activity"
         summary = row["summary"] or ""
-        line = f"  {start}-{end}  {title}  ({row['event_count']} visits)"
+        unit = "messages" if row["session_type"] == "ai" else "visits"
+        line = f"  {start}-{end}  {title}  ({row['event_count']} {unit})"
         if summary:
             line += f"\n        {summary}"
         lines.append(line)
@@ -159,7 +170,7 @@ def _build_worklog_prompt(
         for row in rows
     )
     event_block = "\n".join(
-        f"- {row['title'] or '(no title)'}\n  {row['url']}"
+        f"- {row['title'] or '(no title)'}" + (f"\n  {_event_detail(row)}" if _event_detail(row) else "")
         for row in events
     )
     session_block = "\n".join(
@@ -169,12 +180,12 @@ def _build_worklog_prompt(
     )
     return (
         f"{_language_instruction()}\n\n"
-        f"以下は {date_label} の変更ファイル、ブラウザ閲覧セッション、補助的な閲覧履歴です。\n"
+        f"以下は {date_label} の変更ファイル、活動セッション、補助的な活動履歴です。\n"
         "これらの情報からその日の作業内容を 3〜5 文でまとめてください。\n"
         "技術的な詳細よりも「何に取り組んでいたか」を重視してください。\n\n"
         f"ファイル一覧:\n{file_block}\n\n"
-        f"ブラウザ閲覧セッション:\n{session_block}\n\n"
-        f"補助的なブラウザ履歴:\n{event_block}"
+        f"活動セッション:\n{session_block}\n\n"
+        f"補助的な活動履歴:\n{event_block}"
     )
 
 
@@ -193,9 +204,13 @@ def _build_retrospect_prompt(
                 block_text += f"\n  {row['summary_short']}"
             block_text += "\n"
         for row in events:
-            block_text += f"- browser: {row['title'] or '(no title)'}\n  {row['url']}\n"
+            detail = _event_detail(row)
+            block_text += f"- activity: {row['title'] or '(no title)'}"
+            if detail:
+                block_text += f"\n  {detail}"
+            block_text += "\n"
     for day_label, sessions in session_blocks:
-        block_text += f"\n【{day_label} browser sessions】\n"
+        block_text += f"\n【{day_label} activity sessions】\n"
         for row in sessions:
             block_text += (
                 f"- {_format_event_time(row['start_time'])}-{_format_event_time(row['end_time'])} "
@@ -203,7 +218,7 @@ def _build_retrospect_prompt(
             )
     return (
         f"{_language_instruction()}\n\n"
-        f"以下は {from_label} から {to_label} の期間に変更されたファイルとブラウザ閲覧履歴です。\n"
+        f"以下は {from_label} から {to_label} の期間に変更されたファイルと活動履歴です。\n"
         "この期間に何に取り組んでいたかを 3〜5 文でまとめてください。\n\n"
         f"{block_text}"
     )
@@ -228,38 +243,41 @@ def _print_worklog(
             if row["summary_short"]:
                 print(f"  - {row['summary_short']}")
         if sessions:
-            print(f"\n### ブラウザ閲覧セッション ({len(sessions)}件)\n")
+            print(f"\n### 活動セッション ({len(sessions)}件)\n")
             for row in sessions:
                 start = _format_event_time(row["start_time"])
                 end = _format_event_time(row["end_time"])
-                print(f"- {row['title'] or row['primary_domain']} ({start}-{end}, {row['event_count']} visits)")
+                unit = "messages" if row["session_type"] == "ai" else "visits"
+                print(f"- {row['title'] or row['primary_domain']} ({start}-{end}, {row['event_count']} {unit})")
                 if row["summary"]:
                     print(f"  - {row['summary']}")
         if events:
-            print(f"\n### 補助的なブラウザ履歴 ({len(events)}件)\n")
+            print(f"\n### 補助的な活動履歴 ({len(events)}件)\n")
             for row in events:
                 time_str = _format_event_time(row["event_time"])
                 print(f"- {row['title'] or '(no title)'} ({time_str})")
-                print(f"  - {row['url']}")
+                detail = _event_detail(row)
+                if detail:
+                    print(f"  - {detail}")
     else:
         print(f"=== {date_label} の作業記録 ===\n")
         if summary:
             print(summary)
         print()
         print(f"変更ファイル: {len(rows)}件")
-        print(f"ブラウザ閲覧セッション: {len(sessions)}件")
-        print(f"ブラウザ履歴: {len(events)}件")
+        print(f"活動セッション: {len(sessions)}件")
+        print(f"活動履歴: {len(events)}件")
         print()
         for line in _build_file_lines(rows):
             print(line)
         if sessions:
             print()
-            print("--- ブラウザ閲覧セッション ---")
+            print("--- 活動セッション ---")
             for line in _build_session_lines(sessions):
                 print(line)
         if events:
             print()
-            print("--- 補助的なブラウザ履歴 ---")
+            print("--- 補助的な活動履歴 ---")
             for line in _build_event_lines(events):
                 print(line)
 
@@ -287,15 +305,17 @@ def worklog_command(
         start_ts=start_ts,
         end_ts=end_ts,
         limit=limit,
-        source_prefix="browser:",
+        source_prefix=None,
     )
     sessions = query_activity_sessions_in_range(
         db_path,
         start_ts=start_ts,
         end_ts=end_ts,
         limit=limit,
-        source_prefix="browser:",
+        source_prefix=None,
     )
+    events = sorted(events, key=lambda row: float(row["event_time"]))
+    sessions = sorted(sessions, key=lambda row: float(row["start_time"]))
     prompt_events = [] if sessions else events
 
     date_label = target.isoformat()
@@ -369,14 +389,14 @@ def retrospect_command(
         start_ts=start_ts,
         end_ts=end_ts,
         limit=limit,
-        source_prefix="browser:",
+        source_prefix=None,
     )
     sessions = query_activity_sessions_in_range(
         db_path,
         start_ts=start_ts,
         end_ts=end_ts,
         limit=limit,
-        source_prefix="browser:",
+        source_prefix=None,
     )
 
     from_label = label
@@ -432,7 +452,7 @@ def retrospect_command(
             d_rows = day_blocks.get(d, [])
             d_events = event_day_blocks.get(d, [])
             d_sessions = session_day_blocks.get(d, [])
-            print(f"### {d.isoformat()} ({len(d_rows)} files / {len(d_sessions)} sessions / {len(d_events)} browser)\n")
+            print(f"### {d.isoformat()} ({len(d_rows)} files / {len(d_sessions)} sessions / {len(d_events)} events)\n")
             for row in d_rows:
                 time_str = _format_mtime(row["mtime"])
                 print(f"- `{row['path']}` ({time_str})")
@@ -440,12 +460,15 @@ def retrospect_command(
                     print(f"  - {row['summary_short']}")
             for row in d_events:
                 time_str = _format_event_time(row["event_time"])
-                print(f"- browser: {row['title'] or '(no title)'} ({time_str})")
-                print(f"  - {row['url']}")
+                print(f"- activity: {row['title'] or '(no title)'} ({time_str})")
+                detail = _event_detail(row)
+                if detail:
+                    print(f"  - {detail}")
             for row in d_sessions:
                 start = _format_event_time(row["start_time"])
                 end = _format_event_time(row["end_time"])
-                print(f"- browser session: {row['title'] or row['primary_domain']} ({start}-{end}, {row['event_count']} visits)")
+                unit = "messages" if row["session_type"] == "ai" else "visits"
+                print(f"- activity session: {row['title'] or row['primary_domain']} ({start}-{end}, {row['event_count']} {unit})")
                 if row["summary"]:
                     print(f"  - {row['summary']}")
             print()
@@ -458,15 +481,15 @@ def retrospect_command(
             d_rows = day_blocks.get(d, [])
             d_events = event_day_blocks.get(d, [])
             d_sessions = session_day_blocks.get(d, [])
-            print(f"--- {d.isoformat()} ({len(d_rows)} files / {len(d_sessions)} sessions / {len(d_events)} browser) ---")
+            print(f"--- {d.isoformat()} ({len(d_rows)} files / {len(d_sessions)} sessions / {len(d_events)} events) ---")
             for line in _build_file_lines(d_rows):
                 print(line)
             if d_sessions:
-                print("  [browser sessions]")
+                print("  [activity sessions]")
                 for line in _build_session_lines(d_sessions):
                     print(line)
             if d_events:
-                print("  [browser]")
+                print("  [activity]")
                 for line in _build_event_lines(d_events):
                     print(line)
             print()

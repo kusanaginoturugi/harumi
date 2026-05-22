@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import sys
 import time
+import zipfile
 from pathlib import Path
 
 from rich.console import Console
@@ -10,6 +11,7 @@ from rich.panel import Panel
 from rich.rule import Rule
 from rich.text import Text
 
+from harumi.ai_history import import_ai_history
 from harumi.browser_history import (
     BrowserHistorySource,
     discover_browser_history_sources,
@@ -283,6 +285,56 @@ def browser_history_import_command(
     return 0
 
 
+def ai_history_import_command(
+    provider: str,
+    source_path: Path,
+    since_last: bool,
+    execute: bool,
+    confirm: str | None,
+    limit: int | None,
+) -> int:
+    db_path = _ensure_ready()
+    resolved = source_path.expanduser().resolve()
+    if not resolved.exists():
+        print(f"AI history source does not exist: {resolved}", file=sys.stderr)
+        return 2
+    should_execute = execute and confirm == "IMPORT-AI-HISTORY"
+    print("Sensitive operation: ai-history import")
+    print(f"Provider: {provider}")
+    print(f"Source: {resolved}")
+    print(f"Incremental mode: {'on' if since_last else 'off'}")
+    if limit is not None:
+        print(f"Limit: {limit}")
+    print()
+    print("This imports AI conversation titles and prompt samples into Harumi activity events.")
+
+    try:
+        stats = import_ai_history(
+            db_path,
+            provider=provider,
+            source_path=resolved,
+            execute=should_execute,
+            since_last=since_last,
+            limit=limit,
+        )
+    except (OSError, ValueError, zipfile.BadZipFile) as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+
+    print()
+    print(f"Conversations read: {stats.conversations_seen}")
+    print(f"Conversations after filters: {stats.conversations_after_filters}")
+    if not should_execute:
+        print("Dry run only. No AI history was stored.")
+        print("To execute, rerun with:")
+        print("  --execute --confirm IMPORT-AI-HISTORY")
+        return 0
+
+    print(f"Imported new events: {stats.imported_events}")
+    print(f"AI sessions changed: {stats.sessions_changed}")
+    return 0
+
+
 def regenerate_summaries_command(
     scope: str,
     execute: bool,
@@ -505,6 +557,16 @@ def build_parser() -> argparse.ArgumentParser:
     browser_import_parser.add_argument("--include-domain", action="append")
     browser_import_parser.add_argument("--exclude-domain", action="append")
     browser_import_parser.add_argument("--limit", type=int, default=1000, help="Maximum visits to read per browser source.")
+    ai_parser = subparsers.add_parser("ai-history", help="Import AI assistant conversation history as work activity.")
+    ai_subparsers = ai_parser.add_subparsers(dest="ai_history_command")
+
+    ai_import_parser = ai_subparsers.add_parser("import", help="Import exported AI conversation history.")
+    ai_import_parser.add_argument("source", type=Path, help="ChatGPT conversations.json or data export zip.")
+    ai_import_parser.add_argument("--provider", choices=("chatgpt", "claude", "gemini"), default="chatgpt")
+    ai_import_parser.add_argument("--since-last", action="store_true", help="Import only conversations updated after the last import.")
+    ai_import_parser.add_argument("--execute", action="store_true")
+    ai_import_parser.add_argument("--confirm")
+    ai_import_parser.add_argument("--limit", type=int)
     regen_parser = subparsers.add_parser(
         "regenerate-summaries",
         help="Dangerously purge and rebuild stored summaries and related embeddings.",
@@ -590,6 +652,18 @@ def main(argv: list[str] | None = None) -> int:
                 args.redact_title,
                 args.include_domain,
                 args.exclude_domain,
+                args.limit,
+            )
+        parser.print_help()
+        return 0
+    if args.command == "ai-history":
+        if args.ai_history_command == "import":
+            return ai_history_import_command(
+                args.provider,
+                args.source,
+                args.since_last,
+                args.execute,
+                args.confirm,
                 args.limit,
             )
         parser.print_help()
