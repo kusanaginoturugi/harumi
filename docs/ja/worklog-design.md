@@ -1,5 +1,8 @@
 # 作業記録機能 設計書
 
+> 初期設計メモ: 現在の `worklog` / `retrospect` はファイル更新だけでなく、ブラウザ履歴と AI 履歴の activity も扱います。
+> 現在の使い方は `README.ja.md` と `harumi worklog --help` / `harumi retrospect --help` を参照してください。
+
 ## 概要
 
 Harumi に「今日（または指定期間）に何をしていたか」を自動でまとめる機能を追加する。

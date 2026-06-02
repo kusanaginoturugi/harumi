@@ -13,6 +13,9 @@ Current status:
 - local summaries through Ollama
 - embedding-based semantic search
 - folder-aware search and ranking
+- browser history import for work logs
+- AI assistant export import for work logs
+- worklog and retrospect reports from files and activity
 
 ## Quick start
 
@@ -130,30 +133,25 @@ gems/
 tmp/
 ```
 
-Import browser history as worklog activity events. This is dry-run by default and strips URL query strings unless `--keep-query` is set:
-
-```bash
-harumi browser-history sources
-harumi browser-history import --last 7d
-harumi browser-history import --last 7d --execute --confirm IMPORT-BROWSER-HISTORY
-harumi browser-history import --since-last --execute --confirm IMPORT-BROWSER-HISTORY
-```
-
-Imported browser visits are stored as raw activity events and compressed into browser activity sessions for `harumi worklog` / `harumi retrospect`.
-Harumi intentionally does not inspect sandboxed Snap or Flatpak browser profile directories; those installations are treated as isolated app data.
-
-`worklog` and `retrospect` show configured work hours by default, so private-time browsing stays out of normal reports. Configure the window with `work_hours_start`, `work_hours_end`, and `work_days`, and use `--include-private-time` when you explicitly want the full day:
-
-```bash
-harumi config set work_hours_start 09:00
-harumi config set work_hours_end 18:00
-harumi worklog --include-private-time
-```
-
 Check local readiness:
 
 ```bash
 harumi status
+```
+
+Show index, storage, model, and config status:
+
+```bash
+harumi info
+```
+
+Manage persistent configuration in `~/.config/harumi/config.toml`:
+
+```bash
+harumi config get
+harumi config get summary_model
+harumi config set summary_model qwen3:14b
+harumi config set work_hours_start 09:00
 ```
 
 Dangerous maintenance command for rebuilding summaries after changing language or summary policy:
@@ -162,12 +160,74 @@ Dangerous maintenance command for rebuilding summaries after changing language o
 harumi regenerate-summaries --scope all --execute --confirm RESET-SUMMARIES
 ```
 
+## Activity imports and work logs
+
+Harumi can import browser history and AI assistant exports as local activity. Imports are dry-run by default and require an explicit confirmation token before writing to the database.
+
+Import browser history:
+
+```bash
+harumi browser-history sources
+harumi browser-history import --last 7d
+harumi browser-history import --last 7d --execute --confirm IMPORT-BROWSER-HISTORY
+harumi browser-history import --since-last --execute --confirm IMPORT-BROWSER-HISTORY
+```
+
+Browser imports strip URL query strings and fragments by default. Use `--keep-query` only when you intentionally want full URLs stored. Use `--redact-title` if page titles are too sensitive. Harumi intentionally does not inspect sandboxed Snap or Flatpak browser profile directories; those installations are treated as isolated app data.
+
+Import AI assistant history:
+
+```bash
+harumi ai-history import ~/Downloads/chatgpt-export.zip
+harumi ai-history import ~/Downloads/chatgpt-export.zip --execute --confirm IMPORT-AI-HISTORY
+
+harumi ai-history import ~/Downloads/claude-export.zip --provider claude --execute --confirm IMPORT-AI-HISTORY
+harumi ai-history import ~/Downloads/gemini-takeout.zip --provider gemini --execute --confirm IMPORT-AI-HISTORY
+harumi ai-history import ~/Downloads/gemini-takeout.zip --provider gemini --since-last --execute --confirm IMPORT-AI-HISTORY
+```
+
+Supported AI providers:
+
+- `chatgpt`: OpenAI data export zip or `conversations.json`
+- `claude`: Claude export zip containing `conversations.json`
+- `gemini`: Google Takeout Gemini activity HTML zip
+
+Imported activity is stored as raw activity events and compressed into sessions for `harumi worklog` / `harumi retrospect`. Worklog output hides AI export file paths because they are implementation metadata, not useful work context.
+
+Summarize work for a day:
+
+```bash
+harumi worklog
+harumi worklog --date yesterday
+harumi worklog --date 2026-05-21 --no-llm
+harumi worklog --date 2026-05-21 --output markdown
+```
+
+Look back by year, month, or day:
+
+```bash
+harumi retrospect 2026
+harumi retrospect 202605
+harumi retrospect 20260521 --no-llm
+```
+
+`worklog` and `retrospect` use configured work hours by default, so private-time activity stays out of normal reports. Configure the window with `work_hours_start`, `work_hours_end`, and `work_days`, and use `--include-private-time` when you explicitly want the full day:
+
+```bash
+harumi config set work_hours_start 09:00
+harumi config set work_hours_end 18:00
+harumi config set work_days mon,tue,wed,thu,fri
+harumi worklog --include-private-time
+```
+
 ## Environment variables
 
 Harumi uses these environment variables when needed:
 
 - `HARUMI_HOME`
   - override the default local storage directory
+- `HARUMI_CONFIG`
+  - override the config file path
 - `HARUMI_SUMMARY_MODEL`
   - summary model name for Ollama
 - `HARUMI_SUMMARY_LANGUAGE`
@@ -184,6 +244,12 @@ Harumi uses these environment variables when needed:
   - set to `0` to disable embedding generation
 - `HARUMI_FOLDER_SUMMARY_MIN_ITEMS`
   - minimum number of visible child items before summarizing a folder, default `2`
+- `HARUMI_WORK_HOURS_START`
+  - worklog start time, default `09:00`
+- `HARUMI_WORK_HOURS_END`
+  - worklog end time, default `18:00`
+- `HARUMI_WORK_DAYS`
+  - comma-separated work days, default `mon,tue,wed,thu,fri`
 
 Example:
 
@@ -202,3 +268,4 @@ To keep large scans faster, Harumi skips summaries for very short files by defau
 - folder search is supported alongside file search
 - recent files get a small ranking boost, but strong semantic and keyword matches still matter more
 - broad root folders are lightly penalized during folder-oriented search queries
+- deleted or moved paths are not pruned yet; see the stale/prune and inode move-tracking GitHub issues

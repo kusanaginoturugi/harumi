@@ -11,6 +11,9 @@ Harumi は、ローカル PC 上のファイルを索引化し、要約と埋め
 - Ollama によるローカル要約
 - 埋め込みベースの意味検索
 - フォルダも含めた検索とランキング
+- ブラウザ履歴の作業記録への取り込み
+- 生成 AI 履歴エクスポートの作業記録への取り込み
+- ファイル更新と activity に基づく worklog / retrospect
 
 ## クイックスタート
 
@@ -129,30 +132,25 @@ gems/
 tmp/
 ```
 
-ブラウザ履歴は worklog 用の activity event として取り込みます。既定は dry-run で、URL の query string は `--keep-query` を付けない限り保存しません。
-
-```bash
-harumi browser-history sources
-harumi browser-history import --last 7d
-harumi browser-history import --last 7d --execute --confirm IMPORT-BROWSER-HISTORY
-harumi browser-history import --since-last --execute --confirm IMPORT-BROWSER-HISTORY
-```
-
-取り込んだブラウザ履歴は生の activity event として保存し、`harumi worklog` / `harumi retrospect` で使いやすいようにブラウザ閲覧セッションへ圧縮します。
-Harumi は Snap / Flatpak 版ブラウザのサンドボックス化されたプロファイルディレクトリは意図的に参照しません。それらは独立したアプリデータとして扱います。
-
-`worklog` と `retrospect` は既定で設定された勤務時間内だけを表示します。私用時間のブラウザ履歴は通常のレポートには出しません。勤務時間は `work_hours_start`、`work_hours_end`、`work_days` で設定し、明示的に全時間帯を見たい場合だけ `--include-private-time` を使います。
-
-```bash
-harumi config set work_hours_start 09:00
-harumi config set work_hours_end 18:00
-harumi worklog --include-private-time
-```
-
 環境チェック:
 
 ```bash
 harumi status
+```
+
+インデックス、保存先、モデル、設定の状態確認:
+
+```bash
+harumi info
+```
+
+永続設定は `~/.config/harumi/config.toml` に保存します。
+
+```bash
+harumi config get
+harumi config get summary_model
+harumi config set summary_model qwen3:14b
+harumi config set work_hours_start 09:00
 ```
 
 言語や要約方針を変えたあとに summary を作り直したいときは、危険コマンドを明示実行します。
@@ -161,10 +159,72 @@ harumi status
 harumi regenerate-summaries --scope all --execute --confirm RESET-SUMMARIES
 ```
 
+## Activity 取り込みと作業記録
+
+Harumi はブラウザ履歴と生成 AI のエクスポートをローカル activity として取り込めます。取り込みは既定で dry-run で、DB に書き込むには明示的な確認トークンが必要です。
+
+ブラウザ履歴の取り込み:
+
+```bash
+harumi browser-history sources
+harumi browser-history import --last 7d
+harumi browser-history import --last 7d --execute --confirm IMPORT-BROWSER-HISTORY
+harumi browser-history import --since-last --execute --confirm IMPORT-BROWSER-HISTORY
+```
+
+ブラウザ取り込みでは、既定で URL の query string と fragment を保存しません。完全な URL を保存したいときだけ `--keep-query` を使ってください。ページタイトルも保存したくない場合は `--redact-title` を使います。Harumi は Snap / Flatpak 版ブラウザのサンドボックス化されたプロファイルディレクトリは意図的に参照しません。それらは独立したアプリデータとして扱います。
+
+生成 AI 履歴の取り込み:
+
+```bash
+harumi ai-history import ~/Downloads/chatgpt-export.zip
+harumi ai-history import ~/Downloads/chatgpt-export.zip --execute --confirm IMPORT-AI-HISTORY
+
+harumi ai-history import ~/Downloads/claude-export.zip --provider claude --execute --confirm IMPORT-AI-HISTORY
+harumi ai-history import ~/Downloads/gemini-takeout.zip --provider gemini --execute --confirm IMPORT-AI-HISTORY
+harumi ai-history import ~/Downloads/gemini-takeout.zip --provider gemini --since-last --execute --confirm IMPORT-AI-HISTORY
+```
+
+対応 provider:
+
+- `chatgpt`: OpenAI のデータエクスポート zip または `conversations.json`
+- `claude`: `conversations.json` を含む Claude エクスポート zip
+- `gemini`: Google Takeout の Gemini activity HTML zip
+
+取り込んだ activity は生の activity event として保存し、`harumi worklog` / `harumi retrospect` で使いやすいように session へ圧縮します。AI 履歴の export ファイルパスは作業内容としてはノイズなので、worklog 表示では隠します。
+
+1 日の作業記録:
+
+```bash
+harumi worklog
+harumi worklog --date yesterday
+harumi worklog --date 2026-05-21 --no-llm
+harumi worklog --date 2026-05-21 --output markdown
+```
+
+年・月・日単位の振り返り:
+
+```bash
+harumi retrospect 2026
+harumi retrospect 202605
+harumi retrospect 20260521 --no-llm
+```
+
+`worklog` と `retrospect` は既定で設定された勤務時間内だけを表示します。私用時間の activity は通常のレポートには出しません。勤務時間は `work_hours_start`、`work_hours_end`、`work_days` で設定し、明示的に全時間帯を見たい場合だけ `--include-private-time` を使います。
+
+```bash
+harumi config set work_hours_start 09:00
+harumi config set work_hours_end 18:00
+harumi config set work_days mon,tue,wed,thu,fri
+harumi worklog --include-private-time
+```
+
 ## 環境変数
 
 - `HARUMI_HOME`
   - ローカル保存先を上書きする
+- `HARUMI_CONFIG`
+  - 設定ファイルパスを上書きする
 - `HARUMI_SUMMARY_MODEL`
   - Ollama の summary モデル名
 - `HARUMI_SUMMARY_LANGUAGE`
@@ -181,6 +241,12 @@ harumi regenerate-summaries --scope all --execute --confirm RESET-SUMMARIES
   - `0` にすると embedding 生成を無効化
 - `HARUMI_FOLDER_SUMMARY_MIN_ITEMS`
   - フォルダ要約を作る最小子要素数。既定値は `2`
+- `HARUMI_WORK_HOURS_START`
+  - worklog の開始時刻。既定値は `09:00`
+- `HARUMI_WORK_HOURS_END`
+  - worklog の終了時刻。既定値は `18:00`
+- `HARUMI_WORK_DAYS`
+  - worklog 対象曜日。既定値は `mon,tue,wed,thu,fri`
 
 例:
 
@@ -199,3 +265,4 @@ harumi scan
 - フォルダも独立した検索対象
 - 新しい情報は少し加点するが、semantic / keyword の強い一致のほうを優先する
 - フォルダ検索では broad な root フォルダに軽い減点を入れている
+- 削除・移動済み path の prune は未実装。stale/prune と inode 移動追跡の GitHub issue を参照

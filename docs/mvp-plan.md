@@ -1,5 +1,8 @@
 # Harumi MVP Plan
 
+> Historical MVP plan: this document records early planning and may mention tools or commands that changed during implementation.
+> For current commands, use `README.md` and `harumi --help`.
+
 ## Objective
 
 Build a local-first assistant that can index selected directories, normalize files into searchable text, generate local summaries with Ollama, and return likely file matches from vague natural-language queries.

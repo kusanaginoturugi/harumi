@@ -33,10 +33,19 @@ harumi config get                # show all settings and their source
 harumi config get summary_model  # show one setting
 harumi config set summary_model qwen3:14b
 
-# Work log — summarize today's modified files via Ollama
+# Activity imports — dry-run by default, explicit confirmation writes to DB
+harumi browser-history sources
+harumi browser-history import --last 7d
+harumi browser-history import --last 7d --execute --confirm IMPORT-BROWSER-HISTORY
+harumi ai-history import ~/Downloads/chatgpt-export.zip
+harumi ai-history import ~/Downloads/claude-export.zip --provider claude --execute --confirm IMPORT-AI-HISTORY
+harumi ai-history import ~/Downloads/gemini-takeout.zip --provider gemini --execute --confirm IMPORT-AI-HISTORY
+
+# Work log — summarize modified files and imported activity via Ollama
 harumi worklog
 harumi worklog --date yesterday
-harumi worklog --no-llm          # file list only, no LLM call
+harumi worklog --no-llm          # raw files/activity only, no LLM call
+harumi worklog --include-private-time
 
 # Retrospect — look back by year / month / day
 harumi retrospect 202604         # April 2026
@@ -51,7 +60,13 @@ Dangerous maintenance (requires explicit confirmation flags):
 harumi regenerate-summaries --scope all --execute --confirm RESET-SUMMARIES
 ```
 
-There is no test suite or linter configured yet.
+Run tests with:
+
+```bash
+python -m unittest discover -s tests
+```
+
+There is no dedicated linter configured yet.
 
 ## Architecture overview
 
@@ -67,7 +82,7 @@ The database has three layers per item:
 | Summaries | `summaries` | `folder_summaries` |
 | Embeddings | `embeddings` | `folder_embeddings` |
 
-Plus two FTS5 virtual tables (`fts_documents`, `fts_folders`) that duplicate key fields for full-text search. Embeddings are stored as JSON arrays in `vector_json`. Schema migrations run inline in `_run_migrations()` by checking `PRAGMA table_info`.
+Plus two FTS5 virtual tables (`fts_documents`, `fts_folders`) that duplicate key fields for full-text search. Activity imports use `activity_events`, `activity_sessions`, and `activity_import_state`. Embeddings are stored as JSON arrays in `vector_json`. Schema migrations run inline in `_run_migrations()` by checking `PRAGMA table_info`.
 
 ### Scan pipeline (`scanner.py`)
 
@@ -125,8 +140,11 @@ HARUMI_SUMMARY_MODEL=qwen3:14b harumi scan
 | `summary_min_chars` | `HARUMI_SUMMARY_MIN_CHARS` | `400` | Min chars before summarizing |
 | `summary_code` | `HARUMI_SUMMARY_CODE` | `false` | Summarize code files |
 | `folder_summary_min_items` | `HARUMI_FOLDER_SUMMARY_MIN_ITEMS` | `2` | Min items to summarize a folder |
+| `work_hours_start` | `HARUMI_WORK_HOURS_START` | `09:00` | Start of normal worklog window |
+| `work_hours_end` | `HARUMI_WORK_HOURS_END` | `18:00` | End of normal worklog window |
+| `work_days` | `HARUMI_WORK_DAYS` | `mon,tue,wed,thu,fri` | Days included in the normal worklog window |
 
-`HARUMI_HOME` (storage directory, default `~/.local/share/harumi`) and `HARUMI_CONFIG` (config file path) are env-only — they cannot be set via the config file.
+`HARUMI_HOME` (storage directory, default `~/.local/share/harumi`) and `HARUMI_CONFIG` (config file path) are env-only; they cannot be set via the config file.
 
 ### Module responsibilities
 
@@ -141,9 +159,11 @@ HARUMI_SUMMARY_MODEL=qwen3:14b harumi scan
 | `search.py` | FTS and vector search; returns unified result dicts |
 | `ranking.py` | Scores and sorts merged results; intent inference from query |
 | `maintenance.py` | Bulk summary/embedding purge and rebuild |
+| `browser_history.py` | Browser history discovery, import, and browser session building |
+| `ai_history.py` | ChatGPT, Claude, and Gemini export import as activity |
 | `ignore_rules.py` | Decides which paths to skip during scanning |
 | `config.py` | Reads env vars and config file; provides typed accessors (priority: env > config > default) |
 | `harumi_config.py` | `config get/set` commands; reads/writes `~/.config/harumi/config.toml` |
 | `info.py` | `info` command; shows index stats, storage, LLM settings, and active config |
-| `worklog.py` | `worklog` and `retrospect` commands |
+| `worklog.py` | `worklog` and `retrospect` commands over files and imported activity |
 | `status.py` | Reports readiness of Ollama, models, and DB |

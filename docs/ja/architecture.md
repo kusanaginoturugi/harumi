@@ -1,5 +1,8 @@
 # Harumi アーキテクチャ
 
+> 初期設計メモ: この文書は当初のアーキテクチャ方針を残したものです。
+> 現在の利用コマンドと対応インポートについては `README.ja.md` と `harumi --help` を正としてください。
+
 ## 目的
 
 Harumi は、あいまいな自然言語の指示から、ローカル PC 上のファイルやフォルダを見つけるためのローカルファーストなアシスタントです。
@@ -56,13 +59,13 @@ AnythingLLM は近い領域にありますが、主眼は選択した文書に�
   - メタデータと正規化済みテキストの保存
 - `SQLite FTS5`
   - ファイル名、パス、本文、要約の全文検索
-- `lancedb` または `qdrant-client`
-  - 意味検索用のベクトル検索
+- SQLite テーブル
+  - 現在の実装では embedding vector を JSON として保存
 - `watchdog`
   - 将来のファイル監視
 - `python-magic`
   - MIME 判定
-- `typer`
+- `argparse`
   - CLI
 - `fastapi`
   - 将来のローカル API
@@ -113,6 +116,11 @@ AnythingLLM は近い領域にありますが、主眼は選択した文書に�
    - 候補ファイルと理由を返す
    - 埋め込みだけに頼らない説明可能な結果を返す
 
+8. Activity importers
+   - ブラウザ履歴を activity event / session として取り込む
+   - ChatGPT、Claude、Gemini のエクスポートを AI activity として取り込む
+   - 取り込んだ activity を worklog / retrospect に利用する
+
 ## データフロー
 
 1. ユーザーがインデックス対象ルートを設定する
@@ -123,8 +131,9 @@ AnythingLLM は近い領域にありますが、主眼は選択した文書に�
 6. 新規または更新ファイルに対して要約を生成する
 7. チャンクと埋め込みを生成する
 8. メタデータ、本文、ベクトルを保存する
-9. クエリ時に全文検索と意味検索を組み合わせる
-10. ランキング済みの結果を返す
+9. 必要に応じてブラウザ履歴と AI エクスポートを activity として取り込む
+10. クエリ時に全文検索と意味検索を組み合わせる
+11. ランキング済みのファイル・フォルダ結果を返す
 
 ## ファイル形式の扱い
 
@@ -167,7 +176,6 @@ AnythingLLM は近い領域にありますが、主眼は選択した文書に�
   cache/
     normalized/
     summaries/
-  vectors/
   logs/
 ```
 
@@ -186,18 +194,9 @@ AnythingLLM は近い領域にありますが、主眼は選択した文書に�
 
 ベクトル保存:
 
-- MVP ではファイル単位の summary embedding を優先
-- 必要なら後で chunk embedding を追加
-
-MVP の推奨:
-
-- ベクトルストアは `LanceDB`
-
-理由:
-
-- ローカルファースト
-- セットアップが軽い
-- 個人規模のコーパスに十分
+- 現在はファイル・フォルダ単位の embedding を SQLite に JSON 配列として保存
+- クエリ時に Python で cosine similarity を計算
+- SQLite JSON vector が遅くなったら、将来的に専用のローカル vector store を検討する
 
 ## 検索設計
 

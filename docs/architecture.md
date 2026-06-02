@@ -1,5 +1,8 @@
 # Harumi Architecture
 
+> Historical design note: this document records the original architecture direction.
+> For current user-facing commands and supported imports, use `README.md` and `harumi --help` as the source of truth.
+
 ## Goal
 
 Harumi is a local-first assistant that helps find files and folders from vague natural-language instructions.
@@ -55,13 +58,13 @@ Reason:
   - Persist metadata and normalized content
 - `SQLite FTS5`
   - Full-text search over filenames, paths, markdown, and summaries
-- `lancedb` or `qdrant-client`
-  - Vector search for semantic retrieval
+- SQLite tables
+  - Store embedding vectors as JSON for the current implementation
 - `watchdog`
   - File change monitoring
 - `python-magic`
   - MIME detection
-- `typer`
+- `argparse`
   - CLI
 - `fastapi`
   - Local API for a future GUI
@@ -112,6 +115,11 @@ Vector search alone is not enough.
    - Return file and folder candidates with reasons
    - Offer explainable results instead of opaque embeddings-only matches
 
+8. Activity importers
+   - Import browser history as activity events and sessions
+   - Import ChatGPT, Claude, and Gemini exports as AI activity
+   - Feed imported activity into worklog and retrospect reports
+
 ## Data Flow
 
 1. User configures one or more root directories
@@ -122,8 +130,9 @@ Vector search alone is not enough.
 6. Summary is generated if the file is new or changed
 7. Chunks and summary embeddings are generated
 8. Metadata, text, and vectors are stored
-9. Query pipeline combines keyword and semantic retrieval
-10. Ranked file results are returned
+9. Optional browser and AI exports are imported as activity
+10. Query pipeline combines keyword and semantic retrieval
+11. Ranked file and folder results are returned
 
 ## File Type Strategy
 
@@ -166,7 +175,6 @@ Use local storage under a dedicated application directory, for example:
   cache/
     normalized/
     summaries/
-  vectors/
   logs/
 ```
 
@@ -244,20 +252,15 @@ Recommended approach:
 
 ### Vector storage
 
-Start simple:
+Current implementation:
 
-- store one embedding for each summary
-- optionally store embeddings for chunks
+- store one embedding per indexed file or folder
+- store vectors as JSON arrays in SQLite
+- compute cosine similarity in Python at query time
 
-Recommended choice for MVP:
+Possible future direction:
 
-- `LanceDB`
-
-Reason:
-
-- simple local-first setup
-- no extra service required
-- easy enough for medium-sized personal corpora
+- move vectors to a dedicated local vector store when SQLite JSON vectors become too slow
 
 Alternative:
 

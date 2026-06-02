@@ -561,7 +561,7 @@ def build_parser() -> argparse.ArgumentParser:
     ai_subparsers = ai_parser.add_subparsers(dest="ai_history_command")
 
     ai_import_parser = ai_subparsers.add_parser("import", help="Import exported AI conversation history.")
-    ai_import_parser.add_argument("source", type=Path, help="ChatGPT conversations.json or data export zip.")
+    ai_import_parser.add_argument("source", type=Path, help="AI provider export file, usually a JSON or zip archive.")
     ai_import_parser.add_argument("--provider", choices=("chatgpt", "claude", "gemini"), default="chatgpt")
     ai_import_parser.add_argument("--since-last", action="store_true", help="Import only conversations updated after the last import.")
     ai_import_parser.add_argument("--execute", action="store_true")
@@ -592,21 +592,21 @@ def build_parser() -> argparse.ArgumentParser:
 
     roots_subparsers.add_parser("list", help="List registered root directories.")
 
-    worklog_parser = subparsers.add_parser("worklog", help="Summarize today's work from modified files.")
+    worklog_parser = subparsers.add_parser("worklog", help="Summarize work from modified files and imported activity.")
     worklog_parser.add_argument("--date", default="today", help="Date to summarize (YYYY-MM-DD / today / yesterday)")
     worklog_parser.add_argument("--output", choices=("text", "markdown"), default="text")
     worklog_parser.add_argument("--limit", type=int, default=50)
-    worklog_parser.add_argument("--no-llm", action="store_true", help="Skip LLM synthesis; show file list only.")
+    worklog_parser.add_argument("--no-llm", action="store_true", help="Skip LLM synthesis; show raw activity only.")
     worklog_parser.add_argument("--include-private-time", action="store_true", help="Include activity outside configured work hours.")
 
-    retrospect_parser = subparsers.add_parser("retrospect", help="Retrospect work for a year, month, or day.")
+    retrospect_parser = subparsers.add_parser("retrospect", help="Retrospect files and activity for a year, month, or day.")
     retrospect_parser.add_argument(
         "period",
         help="4 digits=year (2026), 6 digits=month (202604), 8 digits=day (20260430)",
     )
     retrospect_parser.add_argument("--output", choices=("text", "markdown"), default="text")
     retrospect_parser.add_argument("--limit", type=int, default=100)
-    retrospect_parser.add_argument("--no-llm", action="store_true", help="Skip LLM synthesis; show file list only.")
+    retrospect_parser.add_argument("--no-llm", action="store_true", help="Skip LLM synthesis; show raw activity only.")
     retrospect_parser.add_argument("--include-private-time", action="store_true", help="Include activity outside configured work hours.")
 
     config_parser = subparsers.add_parser("config", help="Manage persistent configuration.")
