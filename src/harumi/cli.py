@@ -18,7 +18,14 @@ from harumi.browser_history import (
     import_browser_history,
     parse_date_range,
 )
-from harumi.config import embedding_enabled, ensure_app_dirs
+from harumi.config import (
+    embedding_enabled,
+    ensure_app_dirs,
+    get_ai_history_path,
+    get_scan_browser_history_last,
+    scan_ai_history_enabled,
+    scan_browser_history_enabled,
+)
 from harumi.db import (
     count_regeneration_targets,
     count_index_stats,
@@ -90,18 +97,30 @@ def _shorten_path(value: str, max_len: int = 90) -> str:
     return "..." + value[-(max_len - 3):]
 
 
-def scan_command(progress_interval: float, progress_percent: float) -> int:
-    db_path = _ensure_ready()
+def _run_file_scan(
+    db_path: Path,
+    progress_interval: float,
+    progress_percent: float | None,
+    *,
+    quiet: bool = False,
+):
+    if quiet:
+        return run_scan(db_path)
+
     started_at = time.monotonic()
-    print("Scan progress: estimating scan size...", file=sys.stderr, flush=True)
+    percent_progress_enabled = progress_percent is not None and progress_percent > 0
+    if percent_progress_enabled:
+        print("Scan progress: estimating scan size...", file=sys.stderr, flush=True)
 
     def print_progress(stats, processed: int, total: int, current_path: str) -> None:
         elapsed = int(time.monotonic() - started_at)
-        percent = (processed / total * 100.0) if total else 0.0
+        if total:
+            progress_label = f"{processed}/{total} ({processed / total * 100.0:.1f}%)"
+        else:
+            progress_label = f"{processed} items"
         print(
             "Scan progress: "
-            f"{processed}/{total or '?'} "
-            f"({percent:.1f}%) "
+            f"{progress_label} "
             f"elapsed={elapsed}s "
             f"files={stats.discovered} "
             f"indexed={stats.indexed} "
@@ -114,12 +133,15 @@ def scan_command(progress_interval: float, progress_percent: float) -> int:
             flush=True,
         )
 
-    stats = run_scan(
+    return run_scan(
         db_path,
         progress_callback=print_progress,
         progress_interval_seconds=progress_interval,
-        progress_percent_step=progress_percent,
+        progress_percent_step=progress_percent if percent_progress_enabled else 0.0,
     )
+
+
+def _print_file_scan_summary(db_path: Path, stats) -> None:
     index_counts: dict[str, int] | None = None
     count_error: Exception | None = None
     try:
@@ -159,6 +181,100 @@ def scan_command(progress_interval: float, progress_percent: float) -> int:
     else:
         print("Index counts: unavailable")
         print(f"Count error: {count_error}")
+
+
+def _import_browser_history_during_scan(db_path: Path) -> None:
+    try:
+        start_ts, end_ts, range_label = parse_date_range(None, None, get_scan_browser_history_last())
+        sources = discover_browser_history_sources()
+        stats = import_browser_history(
+            db_path,
+            sources=sources,
+            start_ts=start_ts,
+            end_ts=end_ts,
+            execute=True,
+            strip_url_query=True,
+            redact_title=False,
+            limit_per_source=1000,
+            since_last=True,
+            rebuild_sessions=True,
+        )
+    except Exception as exc:
+        print(f"[warning] Browser history import failed during scan: {exc}", file=sys.stderr)
+        return
+
+    print()
+    print("Browser history import")
+    print(f"Range: {range_label}")
+    print(f"Sources: {stats.sources_seen}")
+    print(f"Visits read: {stats.visits_seen}")
+    print(f"Visits after filters: {stats.visits_after_filters}")
+    print(f"Imported new events: {stats.imported}")
+    print(f"Browser sessions rebuilt: {stats.sessions_rebuilt}")
+    print(f"Session rows changed: {stats.session_rows_changed}")
+
+
+def _import_ai_history_during_scan(db_path: Path) -> None:
+    providers = ("chatgpt", "claude", "gemini")
+    print()
+    print("AI history import")
+    for provider in providers:
+        configured_path = get_ai_history_path(provider)
+        if not configured_path:
+            print(f"{provider}: skipped (no path configured)")
+            continue
+        source_path = Path(configured_path).expanduser().resolve()
+        if not source_path.exists():
+            print(f"{provider}: skipped (path does not exist: {source_path})")
+            continue
+        try:
+            stats = import_ai_history(
+                db_path,
+                provider=provider,
+                source_path=source_path,
+                execute=True,
+                since_last=True,
+            )
+        except (OSError, ValueError, zipfile.BadZipFile) as exc:
+            print(f"{provider}: failed ({exc})")
+            continue
+        print(
+            f"{provider}: conversations read={stats.conversations_seen} "
+            f"after_filters={stats.conversations_after_filters} "
+            f"imported={stats.imported_events} "
+            f"sessions_changed={stats.sessions_changed}"
+        )
+
+
+def scan_command(
+    progress_interval: float,
+    progress_percent: float | None,
+    *,
+    quiet: bool = False,
+    files_only: bool = False,
+    no_browser_history: bool = False,
+    no_ai_history: bool = False,
+) -> int:
+    db_path = _ensure_ready()
+    stats = _run_file_scan(db_path, progress_interval, progress_percent, quiet=quiet)
+    _print_file_scan_summary(db_path, stats)
+
+    if files_only:
+        print()
+        print("Activity imports skipped: files-only mode")
+        return 0
+
+    if scan_browser_history_enabled() and not no_browser_history:
+        _import_browser_history_during_scan(db_path)
+    else:
+        print()
+        print("Browser history import skipped")
+
+    if scan_ai_history_enabled() and not no_ai_history:
+        _import_ai_history_during_scan(db_path)
+    else:
+        print()
+        print("AI history import skipped")
     return 0
 
 
@@ -522,7 +638,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command")
 
     subparsers.add_parser("init", help="Initialize Harumi local storage.")
-    scan_parser = subparsers.add_parser("scan", help="Scan enabled roots and collect file metadata.")
+    scan_parser = subparsers.add_parser("scan", help="Scan roots and refresh configured activity imports.")
     scan_parser.add_argument(
         "--progress-interval",
         type=float,
@@ -532,9 +648,13 @@ def build_parser() -> argparse.ArgumentParser:
     scan_parser.add_argument(
         "--progress-percent",
         type=float,
-        default=1.0,
-        help="Emit scan progress whenever another N percent is completed.",
+        default=None,
+        help="Estimate scan size and emit progress whenever another N percent is completed.",
     )
+    scan_parser.add_argument("--quiet", action="store_true", help="Suppress scan progress output.")
+    scan_parser.add_argument("--files-only", action="store_true", help="Only scan indexed files and folders.")
+    scan_parser.add_argument("--no-browser-history", action="store_true", help="Skip browser history import for this scan.")
+    scan_parser.add_argument("--no-ai-history", action="store_true", help="Skip configured AI history imports for this scan.")
     subparsers.add_parser("status", help="Show Ollama and dependency readiness.")
     subparsers.add_parser("info", help="Show index stats, storage, LLM config, and env vars.")
     browser_parser = subparsers.add_parser("browser-history", help="Import browser history as worklog events.")
@@ -598,6 +718,7 @@ def build_parser() -> argparse.ArgumentParser:
     worklog_parser.add_argument("--limit", type=int, default=50)
     worklog_parser.add_argument("--no-llm", action="store_true", help="Skip LLM synthesis; show raw activity only.")
     worklog_parser.add_argument("--include-private-time", action="store_true", help="Include activity outside configured work hours.")
+    worklog_parser.add_argument("--refresh", action="store_true", help="Run harumi scan before showing the worklog.")
 
     retrospect_parser = subparsers.add_parser("retrospect", help="Retrospect files and activity for a year, month, or day.")
     retrospect_parser.add_argument(
@@ -629,7 +750,14 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "init":
         return init_command()
     if args.command == "scan":
-        return scan_command(args.progress_interval, args.progress_percent)
+        return scan_command(
+            args.progress_interval,
+            args.progress_percent,
+            quiet=args.quiet,
+            files_only=args.files_only,
+            no_browser_history=args.no_browser_history,
+            no_ai_history=args.no_ai_history,
+        )
     if args.command == "status":
         return status_command()
     if args.command == "info":
@@ -683,6 +811,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "roots" and args.roots_command == "list":
         return list_roots_command()
     if args.command == "worklog":
+        if args.refresh:
+            scan_exit = scan_command(600.0, None)
+            if scan_exit != 0:
+                return scan_exit
         return worklog_command(
             args.date,
             args.output,

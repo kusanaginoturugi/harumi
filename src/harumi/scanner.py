@@ -213,6 +213,7 @@ def run_scan(
     _configure_scan_logger()
     stats = ScanStats()
     percent_progress_enabled = progress_percent_step > 0
+    estimate_progress_total = progress_callback is not None and percent_progress_enabled
     with connect(db_path) as connection:
         roots = get_enabled_roots_with_connection(connection)
         valid_roots = []
@@ -224,7 +225,7 @@ def run_scan(
                 logger.error("Missing or invalid root: %s", root_path)
                 continue
             valid_roots.append(root)
-            if progress_callback is not None:
+            if estimate_progress_total:
                 try:
                     total_items += _count_scan_items(root_path, load_ignore_matcher(root_path))
                 except Exception:

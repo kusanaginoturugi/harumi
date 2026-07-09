@@ -102,10 +102,15 @@ List registered roots:
 harumi roots list
 ```
 
-Scan roots and build indexes:
+Scan roots and refresh configured activity imports:
 
 ```bash
 harumi scan
+harumi scan --progress-percent 5
+harumi scan --quiet
+harumi scan --files-only
+harumi scan --no-browser-history
+harumi scan --no-ai-history
 ```
 
 Search for files or folders:
@@ -162,7 +167,9 @@ harumi regenerate-summaries --scope all --execute --confirm RESET-SUMMARIES
 
 ## Activity imports and work logs
 
-Harumi can import browser history and AI assistant exports as local activity. Imports are dry-run by default and require an explicit confirmation token before writing to the database.
+Harumi can import browser history and AI assistant exports as local activity. `harumi scan` refreshes browser history and configured AI exports by default. Use `--files-only`, `--no-browser-history`, or `--no-ai-history` to opt out for a single scan.
+
+Manual import commands are dry-run by default and require an explicit confirmation token before writing to the database.
 
 Import browser history:
 
@@ -192,6 +199,14 @@ Supported AI providers:
 - `claude`: Claude export zip containing `conversations.json`
 - `gemini`: Google Takeout Gemini activity HTML zip
 
+To make `harumi scan` refresh AI history, configure export paths:
+
+```bash
+harumi config set ai_history_chatgpt_path ~/Downloads/chatgpt-export.zip
+harumi config set ai_history_claude_path ~/Downloads/claude-export.zip
+harumi config set ai_history_gemini_path ~/Downloads/gemini-takeout.zip
+```
+
 Imported activity is stored as raw activity events and compressed into sessions for `harumi worklog` / `harumi retrospect`. Worklog output hides AI export file paths because they are implementation metadata, not useful work context.
 
 Summarize work for a day:
@@ -199,6 +214,7 @@ Summarize work for a day:
 ```bash
 harumi worklog
 harumi worklog --date yesterday
+harumi worklog --refresh
 harumi worklog --date 2026-05-21 --no-llm
 harumi worklog --date 2026-05-21 --output markdown
 ```
@@ -250,6 +266,18 @@ Harumi uses these environment variables when needed:
   - worklog end time, default `18:00`
 - `HARUMI_WORK_DAYS`
   - comma-separated work days, default `mon,tue,wed,thu,fri`
+- `HARUMI_SCAN_BROWSER_HISTORY`
+  - set to `0` to stop `harumi scan` from importing browser history
+- `HARUMI_SCAN_BROWSER_HISTORY_LAST`
+  - browser history range used by `harumi scan`, default `7d`
+- `HARUMI_SCAN_AI_HISTORY`
+  - set to `0` to stop `harumi scan` from importing configured AI exports
+- `HARUMI_AI_HISTORY_CHATGPT_PATH`
+  - ChatGPT export path used by `harumi scan`
+- `HARUMI_AI_HISTORY_CLAUDE_PATH`
+  - Claude export path used by `harumi scan`
+- `HARUMI_AI_HISTORY_GEMINI_PATH`
+  - Gemini export path used by `harumi scan`
 
 Example:
 

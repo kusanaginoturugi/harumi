@@ -120,6 +120,7 @@ AnythingLLM は近い領域にありますが、主眼は選択した文書に�
    - ブラウザ履歴を activity event / session として取り込む
    - ChatGPT、Claude、Gemini のエクスポートを AI activity として取り込む
    - 取り込んだ activity を worklog / retrospect に利用する
+   - `harumi scan` は設定済み activity import も更新する。不要な場合は opt-out する
 
 ## データフロー
 
@@ -131,7 +132,7 @@ AnythingLLM は近い領域にありますが、主眼は選択した文書に�
 6. 新規または更新ファイルに対して要約を生成する
 7. チャンクと埋め込みを生成する
 8. メタデータ、本文、ベクトルを保存する
-9. 必要に応じてブラウザ履歴と AI エクスポートを activity として取り込む
+9. 設定済みのブラウザ履歴と AI エクスポートを scan 中に activity として取り込む
 10. クエリ時に全文検索と意味検索を組み合わせる
 11. ランキング済みのファイル・フォルダ結果を返す
 

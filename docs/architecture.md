@@ -119,6 +119,7 @@ Vector search alone is not enough.
    - Import browser history as activity events and sessions
    - Import ChatGPT, Claude, and Gemini exports as AI activity
    - Feed imported activity into worklog and retrospect reports
+   - `harumi scan` refreshes configured activity imports unless opted out
 
 ## Data Flow
 
@@ -130,7 +131,7 @@ Vector search alone is not enough.
 6. Summary is generated if the file is new or changed
 7. Chunks and summary embeddings are generated
 8. Metadata, text, and vectors are stored
-9. Optional browser and AI exports are imported as activity
+9. Configured browser and AI exports are imported as activity during scan
 10. Query pipeline combines keyword and semantic retrieval
 11. Ranked file and folder results are returned
 

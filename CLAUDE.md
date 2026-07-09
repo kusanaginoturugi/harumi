@@ -24,6 +24,11 @@ Running the CLI during development:
 harumi init
 harumi roots add ~/Documents
 harumi scan
+harumi scan --progress-percent 5
+harumi scan --quiet
+harumi scan --files-only
+harumi scan --no-browser-history
+harumi scan --no-ai-history
 harumi find "recent travel document"
 harumi status
 harumi info                      # index stats, storage, config
@@ -43,6 +48,7 @@ harumi ai-history import ~/Downloads/gemini-takeout.zip --provider gemini --exec
 
 # Work log — summarize modified files and imported activity via Ollama
 harumi worklog
+harumi worklog --refresh       # run scan first, then show worklog
 harumi worklog --date yesterday
 harumi worklog --no-llm          # raw files/activity only, no LLM call
 harumi worklog --include-private-time
@@ -143,6 +149,12 @@ HARUMI_SUMMARY_MODEL=qwen3:14b harumi scan
 | `work_hours_start` | `HARUMI_WORK_HOURS_START` | `09:00` | Start of normal worklog window |
 | `work_hours_end` | `HARUMI_WORK_HOURS_END` | `18:00` | End of normal worklog window |
 | `work_days` | `HARUMI_WORK_DAYS` | `mon,tue,wed,thu,fri` | Days included in the normal worklog window |
+| `scan_browser_history` | `HARUMI_SCAN_BROWSER_HISTORY` | `true` | Import browser history during `harumi scan` |
+| `scan_browser_history_last` | `HARUMI_SCAN_BROWSER_HISTORY_LAST` | `7d` | Browser history range used by `harumi scan` |
+| `scan_ai_history` | `HARUMI_SCAN_AI_HISTORY` | `true` | Import configured AI history exports during `harumi scan` |
+| `ai_history_chatgpt_path` | `HARUMI_AI_HISTORY_CHATGPT_PATH` | empty | ChatGPT export path used by `harumi scan` |
+| `ai_history_claude_path` | `HARUMI_AI_HISTORY_CLAUDE_PATH` | empty | Claude export path used by `harumi scan` |
+| `ai_history_gemini_path` | `HARUMI_AI_HISTORY_GEMINI_PATH` | empty | Gemini export path used by `harumi scan` |
 
 `HARUMI_HOME` (storage directory, default `~/.local/share/harumi`) and `HARUMI_CONFIG` (config file path) are env-only; they cannot be set via the config file.
 

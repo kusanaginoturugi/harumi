@@ -101,10 +101,15 @@ harumi roots add ~/Documents
 harumi roots list
 ```
 
-スキャン:
+ルートをスキャンし、設定済み activity import も更新:
 
 ```bash
 harumi scan
+harumi scan --progress-percent 5
+harumi scan --quiet
+harumi scan --files-only
+harumi scan --no-browser-history
+harumi scan --no-ai-history
 ```
 
 検索:
@@ -161,7 +166,9 @@ harumi regenerate-summaries --scope all --execute --confirm RESET-SUMMARIES
 
 ## Activity 取り込みと作業記録
 
-Harumi はブラウザ履歴と生成 AI のエクスポートをローカル activity として取り込めます。取り込みは既定で dry-run で、DB に書き込むには明示的な確認トークンが必要です。
+Harumi はブラウザ履歴と生成 AI のエクスポートをローカル activity として取り込めます。`harumi scan` は既定でブラウザ履歴と設定済み AI export を更新します。1 回だけ外したい場合は `--files-only`、`--no-browser-history`、`--no-ai-history` を使います。
+
+手動取り込みコマンドは既定で dry-run で、DB に書き込むには明示的な確認トークンが必要です。
 
 ブラウザ履歴の取り込み:
 
@@ -191,6 +198,14 @@ harumi ai-history import ~/Downloads/gemini-takeout.zip --provider gemini --sinc
 - `claude`: `conversations.json` を含む Claude エクスポート zip
 - `gemini`: Google Takeout の Gemini activity HTML zip
 
+`harumi scan` で AI 履歴も更新するには、export path を設定します。
+
+```bash
+harumi config set ai_history_chatgpt_path ~/Downloads/chatgpt-export.zip
+harumi config set ai_history_claude_path ~/Downloads/claude-export.zip
+harumi config set ai_history_gemini_path ~/Downloads/gemini-takeout.zip
+```
+
 取り込んだ activity は生の activity event として保存し、`harumi worklog` / `harumi retrospect` で使いやすいように session へ圧縮します。AI 履歴の export ファイルパスは作業内容としてはノイズなので、worklog 表示では隠します。
 
 1 日の作業記録:
@@ -198,6 +213,7 @@ harumi ai-history import ~/Downloads/gemini-takeout.zip --provider gemini --sinc
 ```bash
 harumi worklog
 harumi worklog --date yesterday
+harumi worklog --refresh
 harumi worklog --date 2026-05-21 --no-llm
 harumi worklog --date 2026-05-21 --output markdown
 ```
@@ -247,6 +263,18 @@ harumi worklog --include-private-time
   - worklog の終了時刻。既定値は `18:00`
 - `HARUMI_WORK_DAYS`
   - worklog 対象曜日。既定値は `mon,tue,wed,thu,fri`
+- `HARUMI_SCAN_BROWSER_HISTORY`
+  - `0` にすると `harumi scan` でブラウザ履歴を取り込まない
+- `HARUMI_SCAN_BROWSER_HISTORY_LAST`
+  - `harumi scan` が使うブラウザ履歴の範囲。既定値は `7d`
+- `HARUMI_SCAN_AI_HISTORY`
+  - `0` にすると `harumi scan` で設定済み AI export を取り込まない
+- `HARUMI_AI_HISTORY_CHATGPT_PATH`
+  - `harumi scan` が使う ChatGPT export path
+- `HARUMI_AI_HISTORY_CLAUDE_PATH`
+  - `harumi scan` が使う Claude export path
+- `HARUMI_AI_HISTORY_GEMINI_PATH`
+  - `harumi scan` が使う Gemini export path
 
 例:
 

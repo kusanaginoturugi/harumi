@@ -7,9 +7,27 @@
 
 `harumi init`
 
-- Register a directory and scan it:
+- Register a directory and scan files plus configured activity imports:
 
 `harumi roots add {{~/Documents}} && harumi scan`
+
+- Scan only files and folders:
+
+`harumi scan --files-only`
+
+- Scan with percentage progress:
+
+`harumi scan --progress-percent {{5}}`
+
+- Scan without progress output:
+
+`harumi scan --quiet`
+
+- Scan without one activity source:
+
+`harumi scan --no-browser-history`
+
+`harumi scan --no-ai-history`
 
 - Search indexed files and folders with natural language:
 
@@ -34,6 +52,10 @@
 - Summarize work for a day without calling the LLM:
 
 `harumi worklog --date {{2026-05-21|today|yesterday}} --no-llm`
+
+- Refresh indexes and activity before showing today's worklog:
+
+`harumi worklog --refresh`
 
 - Retrospect a year, month, or day:
 
