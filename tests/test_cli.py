@@ -132,15 +132,52 @@ class CliTests(unittest.TestCase):
             mock_ai.assert_not_called()
             self.assertIn("files-only mode", output.getvalue())
 
-    def test_worklog_refresh_runs_scan_before_worklog(self) -> None:
+    def test_quickscan_command_refreshes_configured_activity_imports(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fake_db = Path(tmpdir) / "harumi.db"
+
+            with (
+                patch("harumi.cli._ensure_ready", return_value=fake_db),
+                patch("harumi.cli._run_file_quickscan", return_value=object()),
+                patch("harumi.cli._print_file_scan_summary"),
+                patch("harumi.cli._print_full_scan_staleness_warning"),
+                patch("harumi.cli.scan_browser_history_enabled", return_value=True),
+                patch("harumi.cli.scan_ai_history_enabled", return_value=True),
+                patch("harumi.cli._import_browser_history_during_scan") as mock_browser,
+                patch("harumi.cli._import_ai_history_during_scan") as mock_ai,
+            ):
+                exit_code = cli.quickscan_command()
+
+            self.assertEqual(exit_code, 0)
+            mock_browser.assert_called_once_with(fake_db)
+            mock_ai.assert_called_once_with(fake_db)
+
+    def test_quickscan_warns_when_full_scan_is_stale(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fake_db = Path(tmpdir) / "harumi.db"
+            stats = type("Stats", (), {"scan_kind": "quick"})()
+
+            with (
+                patch("harumi.cli._ensure_ready", return_value=fake_db),
+                patch("harumi.cli._run_file_quickscan", return_value=stats),
+                patch("harumi.cli._print_file_scan_summary"),
+                patch("harumi.cli._print_full_scan_staleness_warning") as mock_warning,
+                patch("sys.stdout", StringIO()),
+            ):
+                exit_code = cli.quickscan_command(files_only=True)
+
+            self.assertEqual(exit_code, 0)
+            mock_warning.assert_called_once_with(fake_db)
+
+    def test_worklog_refresh_runs_quickscan_before_worklog(self) -> None:
         with (
-            patch("harumi.cli.scan_command", return_value=0) as mock_scan,
+            patch("harumi.cli.quickscan_command", return_value=0) as mock_quickscan,
             patch("harumi.cli.worklog_command", return_value=0) as mock_worklog,
         ):
             exit_code = cli.main(["worklog", "--refresh", "--date", "2026-05-21", "--no-llm"])
 
         self.assertEqual(exit_code, 0)
-        mock_scan.assert_called_once()
+        mock_quickscan.assert_called_once()
         mock_worklog.assert_called_once()
 
 

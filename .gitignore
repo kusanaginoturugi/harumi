@@ -8,3 +8,5 @@ __pycache__/
 .mypy_cache/
 .DS_Store
 .codex
+data/
+llm_logs/

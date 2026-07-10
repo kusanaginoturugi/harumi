@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -11,6 +12,7 @@ from harumi.config import embedding_enabled, get_log_dir, summary_enabled
 from harumi.db import (
     connect,
     get_enabled_roots_with_connection,
+    get_scan_state_with_connection,
     upsert_folder_embedding,
     upsert_folder_record,
     upsert_folder_summary,
@@ -19,10 +21,17 @@ from harumi.db import (
     upsert_document,
     upsert_file_record,
     upsert_fts_document,
+    upsert_scan_state,
     upsert_summary,
 )
 from harumi.embed import embed_text
-from harumi.ignore_rules import IgnoreMatcher, is_ignored_directory, is_ignored_file, load_ignore_matcher
+from harumi.ignore_rules import (
+    IGNORED_DIR_NAMES,
+    IgnoreMatcher,
+    is_ignored_directory,
+    is_ignored_file,
+    load_ignore_matcher,
+)
 from harumi.normalize import normalize_file
 from harumi.summarize import (
     PROMPT_VERSION,
@@ -55,6 +64,8 @@ class ScanStats:
     folder_embedding_failed: int = 0
     folder_skipped: int = 0
     failed: int = 0
+    full_scan_fallbacks: int = 0
+    scan_kind: str = ""
 
 
 ScanProgressCallback = Callable[[ScanStats, int, int, str], None]
@@ -203,6 +214,185 @@ def _index_folder(
     )
 
 
+def _index_file(
+    db_path: Path,
+    *,
+    root_id: int,
+    file_path: Path,
+    stats: ScanStats,
+    connection,
+) -> None:
+    stats.discovered += 1
+    try:
+        file_stat = file_path.stat()
+        status, file_id = upsert_file_record(
+            db_path,
+            root_id=root_id,
+            path=str(file_path),
+            parent_path=str(file_path.parent),
+            filename=file_path.name,
+            extension=file_path.suffix.lower(),
+            size_bytes=file_stat.st_size,
+            mtime=file_stat.st_mtime,
+            connection=connection,
+        )
+    except Exception:
+        stats.failed += 1
+        logger.exception("File stat/upsert failed: %s", file_path)
+        return
+
+    if status == "indexed":
+        stats.indexed += 1
+    elif status == "updated":
+        stats.updated += 1
+    elif status == "unchanged":
+        stats.unchanged += 1
+
+    if status not in {"indexed", "updated"}:
+        return
+
+    try:
+        document = normalize_file(file_path)
+        if document is None:
+            stats.normalization_skipped += 1
+            return
+
+        upsert_document(
+            db_path,
+            file_id=file_id,
+            normalized_text=document.text,
+            normalized_format=document.format,
+            connection=connection,
+        )
+        summary_short = ""
+        if summary_enabled() and should_summarize_text(
+            str(file_path),
+            document.text,
+            document.format,
+        ):
+            try:
+                summary_short, model_name = summarize_text(str(file_path), document.text)
+                if summary_short:
+                    upsert_summary(
+                        db_path,
+                        file_id=file_id,
+                        summary_short=summary_short,
+                        model_name=model_name,
+                        prompt_version=PROMPT_VERSION,
+                        connection=connection,
+                    )
+                    stats.summarized += 1
+            except Exception:
+                stats.summary_failed += 1
+        elif summary_enabled():
+            stats.summary_skipped += 1
+
+        if embedding_enabled():
+            embedding_source = summary_short or document.text[:4000]
+            try:
+                vector, model_name = embed_text(embedding_source)
+                upsert_embedding(
+                    db_path,
+                    file_id=file_id,
+                    model_name=model_name,
+                    vector=vector,
+                    source_text=embedding_source,
+                    connection=connection,
+                )
+                stats.embedded += 1
+            except Exception:
+                stats.embedding_failed += 1
+
+        upsert_fts_document(
+            db_path,
+            file_id=file_id,
+            path=str(file_path),
+            filename=file_path.name,
+            extension=file_path.suffix.lower(),
+            parent_path=str(file_path.parent),
+            normalized_text=document.text,
+            summary_short=summary_short,
+            connection=connection,
+        )
+        stats.normalized += 1
+    except Exception:
+        stats.failed += 1
+        logger.exception("File normalization/indexing failed: %s", file_path)
+
+
+def _folder_child_names(folder_path: Path, matcher: IgnoreMatcher) -> tuple[list[str], list[str]]:
+    dirnames: list[str] = []
+    filenames: list[str] = []
+    try:
+        entries = sorted(folder_path.iterdir(), key=lambda path: path.name.lower())
+    except OSError:
+        return dirnames, filenames
+
+    for entry in entries:
+        if entry.is_dir():
+            if not is_ignored_directory(entry, matcher):
+                dirnames.append(entry.name)
+        elif entry.is_file():
+            filenames.append(entry.name)
+    return dirnames, filenames
+
+
+def _folder_lineage(folder_path: Path, root_path: Path) -> list[Path]:
+    folders: list[Path] = []
+    current = folder_path
+    root_resolved = root_path.resolve()
+    while True:
+        try:
+            current.resolve().relative_to(root_resolved)
+        except ValueError:
+            break
+        folders.append(current)
+        if current.resolve() == root_resolved:
+            break
+        current = current.parent
+    return folders
+
+
+def _find_recent_files(root_path: Path, cutoff: float, matcher: IgnoreMatcher) -> list[Path]:
+    args = ["find", str(root_path)]
+    if IGNORED_DIR_NAMES:
+        args.append("(")
+        for index, name in enumerate(sorted(IGNORED_DIR_NAMES)):
+            if index:
+                args.append("-o")
+            args.extend(["-name", name])
+        args.extend([")", "-type", "d", "-prune", "-o"])
+    args.extend(["-type", "f", "-newermt", f"@{cutoff}", "-print0"])
+
+    try:
+        completed = subprocess.run(
+            args,
+            check=True,
+            capture_output=True,
+        )
+        raw_paths = [value for value in completed.stdout.split(b"\0") if value]
+        paths = [Path(value.decode("utf-8", errors="surrogateescape")) for value in raw_paths]
+    except (OSError, subprocess.CalledProcessError):
+        paths = []
+        for current_root, dirnames, filenames in root_path.walk():
+            dirnames[:] = [
+                name for name in dirnames if not is_ignored_directory(current_root / name, matcher)
+            ]
+            for filename in filenames:
+                path = current_root / filename
+                try:
+                    if path.stat().st_mtime > cutoff:
+                        paths.append(path)
+                except OSError:
+                    continue
+
+    return [
+        path
+        for path in paths
+        if path.exists() and path.is_file() and not is_ignored_file(path, matcher)
+    ]
+
+
 def run_scan(
     db_path: Path,
     *,
@@ -212,6 +402,7 @@ def run_scan(
 ) -> ScanStats:
     _configure_scan_logger()
     stats = ScanStats()
+    stats.scan_kind = "full"
     percent_progress_enabled = progress_percent_step > 0
     estimate_progress_total = progress_callback is not None and percent_progress_enabled
     with connect(db_path) as connection:
@@ -254,6 +445,7 @@ def run_scan(
 
         maybe_emit_progress("scan started", force=True)
         for root in valid_roots:
+            root_scan_started_at = time.time()
             root_path = Path(root["path"])
             ignore_matcher = load_ignore_matcher(root_path)
 
@@ -297,104 +489,123 @@ def run_scan(
                     if is_ignored_file(file_path, ignore_matcher):
                         continue
 
-                    stats.discovered += 1
-                    try:
-                        file_stat = file_path.stat()
-                        status, file_id = upsert_file_record(
-                            db_path,
-                            root_id=int(root["id"]),
-                            path=str(file_path),
-                            parent_path=str(file_path.parent),
-                            filename=file_path.name,
-                            extension=file_path.suffix.lower(),
-                            size_bytes=file_stat.st_size,
-                            mtime=file_stat.st_mtime,
-                            connection=connection,
-                        )
-                    except Exception:
-                        stats.failed += 1
-                        logger.exception("File stat/upsert failed: %s", file_path)
-                        processed_items += 1
-                        maybe_emit_progress(str(file_path))
-                        continue
-
-                    if status == "indexed":
-                        stats.indexed += 1
-                    elif status == "updated":
-                        stats.updated += 1
-                    elif status == "unchanged":
-                        stats.unchanged += 1
-
-                    if status in {"indexed", "updated"}:
-                        try:
-                            document = normalize_file(file_path)
-                            if document is None:
-                                stats.normalization_skipped += 1
-                            else:
-                                upsert_document(
-                                    db_path,
-                                    file_id=file_id,
-                                    normalized_text=document.text,
-                                    normalized_format=document.format,
-                                    connection=connection,
-                                )
-                                summary_short = ""
-                                if summary_enabled() and should_summarize_text(
-                                    str(file_path),
-                                    document.text,
-                                    document.format,
-                                ):
-                                    try:
-                                        summary_short, model_name = summarize_text(str(file_path), document.text)
-                                        if summary_short:
-                                            upsert_summary(
-                                                db_path,
-                                                file_id=file_id,
-                                                summary_short=summary_short,
-                                                model_name=model_name,
-                                                prompt_version=PROMPT_VERSION,
-                                                connection=connection,
-                                            )
-                                            stats.summarized += 1
-                                    except Exception:
-                                        stats.summary_failed += 1
-                                elif summary_enabled():
-                                    stats.summary_skipped += 1
-                                if embedding_enabled():
-                                    embedding_source = summary_short or document.text[:4000]
-                                    try:
-                                        vector, model_name = embed_text(embedding_source)
-                                        upsert_embedding(
-                                            db_path,
-                                            file_id=file_id,
-                                            model_name=model_name,
-                                            vector=vector,
-                                            source_text=embedding_source,
-                                            connection=connection,
-                                        )
-                                        stats.embedded += 1
-                                    except Exception:
-                                        stats.embedding_failed += 1
-                                upsert_fts_document(
-                                    db_path,
-                                    file_id=file_id,
-                                    path=str(file_path),
-                                    filename=file_path.name,
-                                    extension=file_path.suffix.lower(),
-                                    parent_path=str(file_path.parent),
-                                    normalized_text=document.text,
-                                    summary_short=summary_short,
-                                    connection=connection,
-                                )
-                                stats.normalized += 1
-                        except Exception:
-                            stats.failed += 1
-                            logger.exception("File normalization/indexing failed: %s", file_path)
-                            processed_items += 1
-                            maybe_emit_progress(str(file_path))
-                            continue
+                    _index_file(
+                        db_path,
+                        root_id=int(root["id"]),
+                        file_path=file_path,
+                        stats=stats,
+                        connection=connection,
+                    )
                     processed_items += 1
                     maybe_emit_progress(str(file_path))
 
+            upsert_scan_state(
+                db_path,
+                root_id=int(root["id"]),
+                started_at=root_scan_started_at,
+                completed_at=time.time(),
+                scan_kind="full",
+                connection=connection,
+            )
+
         maybe_emit_progress("scan complete", force=True)
+    return stats
+
+
+def run_quickscan(
+    db_path: Path,
+    *,
+    progress_callback: ScanProgressCallback | None = None,
+) -> ScanStats:
+    _configure_scan_logger()
+    stats = ScanStats()
+    stats.scan_kind = "quick"
+    needs_full_scan = False
+    with connect(db_path) as connection:
+        roots = get_enabled_roots_with_connection(connection)
+        valid_roots = []
+        for root in roots:
+            root_path = Path(root["path"])
+            if not root_path.exists() or not root_path.is_dir():
+                stats.failed += 1
+                logger.error("Missing or invalid root: %s", root_path)
+                continue
+            state = get_scan_state_with_connection(connection, int(root["id"]))
+            if state is None or float(state["last_started_at"]) <= 0:
+                stats.full_scan_fallbacks += 1
+                needs_full_scan = True
+                break
+            valid_roots.append((root, float(state["last_started_at"])))
+
+    if needs_full_scan:
+        fallback_stats = run_scan(
+            db_path,
+            progress_callback=progress_callback,
+            progress_percent_step=0.0,
+        )
+        fallback_stats.full_scan_fallbacks = stats.full_scan_fallbacks
+        fallback_stats.scan_kind = "full"
+        return fallback_stats
+
+    with connect(db_path) as connection:
+        processed_items = 0
+        total_items = 0
+
+        def emit(current_path: str, *, force: bool = False) -> None:
+            if progress_callback is not None and (force or total_items):
+                progress_callback(stats, processed_items, total_items, current_path)
+
+        emit("quickscan started", force=True)
+        for root, cutoff in valid_roots:
+            root_scan_started_at = time.time()
+            root_failed_before = stats.failed
+            root_path = Path(root["path"])
+            matcher = load_ignore_matcher(root_path)
+            changed_files = _find_recent_files(root_path, cutoff, matcher)
+            folder_paths: set[Path] = set()
+            total_items += len(changed_files)
+
+            for file_path in changed_files:
+                _index_file(
+                    db_path,
+                    root_id=int(root["id"]),
+                    file_path=file_path,
+                    stats=stats,
+                    connection=connection,
+                )
+                folder_paths.update(_folder_lineage(file_path.parent, root_path))
+                processed_items += 1
+                emit(str(file_path))
+
+            total_items += len(folder_paths)
+            for folder_path in sorted(folder_paths, key=lambda path: len(path.parts), reverse=True):
+                dirnames, filenames = _folder_child_names(folder_path, matcher)
+                try:
+                    _index_folder(
+                        db_path,
+                        root_id=int(root["id"]),
+                        folder_path=folder_path,
+                        dirnames=dirnames,
+                        filenames=filenames,
+                        stats=stats,
+                        connection=connection,
+                        matcher=matcher,
+                    )
+                except Exception:
+                    stats.failed += 1
+                    logger.exception("Folder indexing failed: %s", folder_path)
+                processed_items += 1
+                emit(str(folder_path))
+
+            if stats.failed == root_failed_before:
+                upsert_scan_state(
+                    db_path,
+                    root_id=int(root["id"]),
+                    started_at=root_scan_started_at,
+                    completed_at=time.time(),
+                    scan_kind="quick",
+                    connection=connection,
+                )
+
+        emit("quickscan complete", force=True)
     return stats

@@ -17,6 +17,19 @@ CREATE TABLE IF NOT EXISTS roots (
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS scan_state (
+    root_id INTEGER PRIMARY KEY,
+    last_started_at REAL NOT NULL DEFAULT 0,
+    last_completed_at REAL NOT NULL DEFAULT 0,
+    last_full_started_at REAL NOT NULL DEFAULT 0,
+    last_full_completed_at REAL NOT NULL DEFAULT 0,
+    last_quick_started_at REAL NOT NULL DEFAULT 0,
+    last_quick_completed_at REAL NOT NULL DEFAULT 0,
+    scan_kind TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(root_id) REFERENCES roots(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS files (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     root_id INTEGER NOT NULL,
@@ -209,6 +222,59 @@ def _run_migrations(connection: sqlite3.Connection) -> None:
 
     connection.executescript(
         """
+        CREATE TABLE IF NOT EXISTS scan_state (
+            root_id INTEGER PRIMARY KEY,
+            last_started_at REAL NOT NULL DEFAULT 0,
+            last_completed_at REAL NOT NULL DEFAULT 0,
+            last_full_started_at REAL NOT NULL DEFAULT 0,
+            last_full_completed_at REAL NOT NULL DEFAULT 0,
+            last_quick_started_at REAL NOT NULL DEFAULT 0,
+            last_quick_completed_at REAL NOT NULL DEFAULT 0,
+            scan_kind TEXT NOT NULL DEFAULT '',
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(root_id) REFERENCES roots(id) ON DELETE CASCADE
+        );
+        """
+    )
+    connection.commit()
+    scan_state_columns = {
+        row["name"]
+        for row in connection.execute("PRAGMA table_info(scan_state)").fetchall()
+    }
+    for column in (
+        "last_full_started_at",
+        "last_full_completed_at",
+        "last_quick_started_at",
+        "last_quick_completed_at",
+    ):
+        if column not in scan_state_columns:
+            connection.execute(
+                f"ALTER TABLE scan_state ADD COLUMN {column} REAL NOT NULL DEFAULT 0"
+            )
+    connection.execute(
+        """
+        UPDATE scan_state
+        SET last_full_started_at = last_started_at,
+            last_full_completed_at = last_completed_at
+        WHERE scan_kind = 'full'
+          AND last_full_started_at = 0
+          AND last_started_at > 0
+        """
+    )
+    connection.execute(
+        """
+        UPDATE scan_state
+        SET last_quick_started_at = last_started_at,
+            last_quick_completed_at = last_completed_at
+        WHERE scan_kind = 'quick'
+          AND last_quick_started_at = 0
+          AND last_started_at > 0
+        """
+    )
+    connection.commit()
+
+    connection.executescript(
+        """
         CREATE TABLE IF NOT EXISTS activity_events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             source TEXT NOT NULL,
@@ -292,6 +358,118 @@ def get_enabled_roots_with_connection(connection: sqlite3.Connection) -> list[sq
         "SELECT id, path FROM roots WHERE enabled = 1 ORDER BY path"
     )
     return list(cursor.fetchall())
+
+
+def get_scan_state_with_connection(
+    connection: sqlite3.Connection,
+    root_id: int,
+) -> sqlite3.Row | None:
+    return connection.execute(
+        """
+        SELECT
+            root_id,
+            last_started_at,
+            last_completed_at,
+            last_full_started_at,
+            last_full_completed_at,
+            last_quick_started_at,
+            last_quick_completed_at,
+            scan_kind,
+            updated_at
+        FROM scan_state
+        WHERE root_id = ?
+        """,
+        (root_id,),
+    ).fetchone()
+
+
+def list_scan_state(db_path: Path) -> list[sqlite3.Row]:
+    with connect(db_path) as connection:
+        cursor = connection.execute(
+            """
+            SELECT
+                roots.id AS root_id,
+                roots.path AS root_path,
+                roots.enabled,
+                scan_state.last_started_at,
+                scan_state.last_completed_at,
+                scan_state.last_full_started_at,
+                scan_state.last_full_completed_at,
+                scan_state.last_quick_started_at,
+                scan_state.last_quick_completed_at,
+                scan_state.scan_kind,
+                scan_state.updated_at
+            FROM roots
+            LEFT JOIN scan_state ON scan_state.root_id = roots.id
+            ORDER BY roots.path
+            """
+        )
+        return list(cursor.fetchall())
+
+
+def upsert_scan_state(
+    db_path: Path,
+    *,
+    root_id: int,
+    started_at: float,
+    completed_at: float,
+    scan_kind: str,
+    connection: sqlite3.Connection | None = None,
+) -> None:
+    manager = nullcontext(connection) if connection is not None else connect(db_path)
+    full_started_at = started_at if scan_kind == "full" else 0
+    full_completed_at = completed_at if scan_kind == "full" else 0
+    quick_started_at = started_at if scan_kind == "quick" else 0
+    quick_completed_at = completed_at if scan_kind == "quick" else 0
+    with manager as connection:
+        connection.execute(
+            """
+            INSERT INTO scan_state (
+                root_id,
+                last_started_at,
+                last_completed_at,
+                last_full_started_at,
+                last_full_completed_at,
+                last_quick_started_at,
+                last_quick_completed_at,
+                scan_kind,
+                updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(root_id) DO UPDATE SET
+                last_started_at = excluded.last_started_at,
+                last_completed_at = excluded.last_completed_at,
+                last_full_started_at = CASE
+                    WHEN excluded.last_full_started_at > 0 THEN excluded.last_full_started_at
+                    ELSE scan_state.last_full_started_at
+                END,
+                last_full_completed_at = CASE
+                    WHEN excluded.last_full_completed_at > 0 THEN excluded.last_full_completed_at
+                    ELSE scan_state.last_full_completed_at
+                END,
+                last_quick_started_at = CASE
+                    WHEN excluded.last_quick_started_at > 0 THEN excluded.last_quick_started_at
+                    ELSE scan_state.last_quick_started_at
+                END,
+                last_quick_completed_at = CASE
+                    WHEN excluded.last_quick_completed_at > 0 THEN excluded.last_quick_completed_at
+                    ELSE scan_state.last_quick_completed_at
+                END,
+                scan_kind = excluded.scan_kind,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (
+                root_id,
+                started_at,
+                completed_at,
+                full_started_at,
+                full_completed_at,
+                quick_started_at,
+                quick_completed_at,
+                scan_kind,
+            ),
+        )
+        connection.commit()
 
 
 def upsert_file_record(

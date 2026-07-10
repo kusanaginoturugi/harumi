@@ -32,16 +32,20 @@ from harumi.db import (
     get_db_path,
     init_db,
     insert_root,
+    list_scan_state,
     list_roots,
 )
 from harumi.harumi_config import config_get_command, config_set_command
 from harumi.info import info_command
 from harumi.maintenance import regenerate_summaries
 from harumi.ranking import rank_results
-from harumi.scanner import run_scan
+from harumi.scanner import run_quickscan, run_scan
 from harumi.search import find_documents, find_similar_documents
 from harumi.status import get_status_report
 from harumi.worklog import worklog_command, retrospect_command
+
+
+FULL_SCAN_STALE_SECONDS = 30 * 24 * 60 * 60
 
 
 def _ensure_ready() -> Path:
@@ -141,7 +145,33 @@ def _run_file_scan(
     )
 
 
-def _print_file_scan_summary(db_path: Path, stats) -> None:
+def _run_file_quickscan(db_path: Path, *, quiet: bool = False):
+    if quiet:
+        return run_quickscan(db_path)
+
+    started_at = time.monotonic()
+
+    def print_progress(stats, processed: int, total: int, current_path: str) -> None:
+        elapsed = int(time.monotonic() - started_at)
+        progress_label = f"{processed}/{total}" if total else f"{processed} items"
+        print(
+            "Quickscan progress: "
+            f"{progress_label} "
+            f"elapsed={elapsed}s "
+            f"files={stats.discovered} "
+            f"indexed={stats.indexed} "
+            f"updated={stats.updated} "
+            f"folders={stats.folders_indexed} "
+            f"failed={stats.failed} "
+            f"current={_shorten_path(current_path)}",
+            file=sys.stderr,
+            flush=True,
+        )
+
+    return run_quickscan(db_path, progress_callback=print_progress)
+
+
+def _print_file_scan_summary(db_path: Path, stats, *, show_quickscan_tip: bool = False) -> None:
     index_counts: dict[str, int] | None = None
     count_error: Exception | None = None
     try:
@@ -170,6 +200,8 @@ def _print_file_scan_summary(db_path: Path, stats) -> None:
     print(f"Folders embedded: {stats.folder_embedded}")
     print(f"Folder embedding failed: {stats.folder_embedding_failed}")
     print(f"Failed: {stats.failed}")
+    if getattr(stats, "full_scan_fallbacks", 0):
+        print(f"Full scan fallbacks: {stats.full_scan_fallbacks}")
     if index_counts is not None:
         print(f"Tracked files: {index_counts['files']}")
         print(f"Tracked folders: {index_counts['folders']}")
@@ -181,6 +213,55 @@ def _print_file_scan_summary(db_path: Path, stats) -> None:
     else:
         print("Index counts: unavailable")
         print(f"Count error: {count_error}")
+    if show_quickscan_tip:
+        print()
+        print("Tip: For everyday updates, use `harumi quickscan`.")
+        print("Run full `harumi scan` after changing roots, .harumiignore, or moving/deleting many files.")
+
+
+def _format_scan_age(seconds: float) -> str:
+    days = int(seconds // (24 * 60 * 60))
+    if days >= 1:
+        return f"{days}d"
+    hours = int(seconds // (60 * 60))
+    if hours >= 1:
+        return f"{hours}h"
+    minutes = int(seconds // 60)
+    return f"{minutes}m"
+
+
+def _print_full_scan_staleness_warning(db_path: Path) -> None:
+    rows = [row for row in list_scan_state(db_path) if row["enabled"]]
+    if not rows:
+        return
+
+    missing = [
+        row["root_path"]
+        for row in rows
+        if float(row["last_full_started_at"] or 0) <= 0
+    ]
+    full_scan_times = [
+        float(row["last_full_started_at"])
+        for row in rows
+        if float(row["last_full_started_at"] or 0) > 0
+    ]
+
+    now = time.time()
+    stale = False
+    oldest_age = 0.0
+    if full_scan_times:
+        oldest_age = now - min(full_scan_times)
+        stale = oldest_age > FULL_SCAN_STALE_SECONDS
+
+    if not missing and not stale:
+        return
+
+    print()
+    if missing:
+        print("Note: Some roots have never completed a full `harumi scan`.")
+    if stale:
+        print(f"Note: Last full `harumi scan` is {_format_scan_age(oldest_age)} old.")
+    print("Run `harumi scan` when you have time to refresh deletes, moves, and ignore-rule changes.")
 
 
 def _import_browser_history_during_scan(db_path: Path) -> None:
@@ -257,7 +338,7 @@ def scan_command(
 ) -> int:
     db_path = _ensure_ready()
     stats = _run_file_scan(db_path, progress_interval, progress_percent, quiet=quiet)
-    _print_file_scan_summary(db_path, stats)
+    _print_file_scan_summary(db_path, stats, show_quickscan_tip=True)
 
     if files_only:
         print()
@@ -275,6 +356,39 @@ def scan_command(
     else:
         print()
         print("AI history import skipped")
+    return 0
+
+
+def quickscan_command(
+    *,
+    quiet: bool = False,
+    files_only: bool = False,
+    no_browser_history: bool = False,
+    no_ai_history: bool = False,
+) -> int:
+    db_path = _ensure_ready()
+    stats = _run_file_quickscan(db_path, quiet=quiet)
+    _print_file_scan_summary(db_path, stats)
+    if getattr(stats, "scan_kind", "") != "full":
+        _print_full_scan_staleness_warning(db_path)
+
+    if files_only:
+        print()
+        print("Activity import skipped (files-only mode)")
+        return 0
+
+    if scan_browser_history_enabled() and not no_browser_history:
+        _import_browser_history_during_scan(db_path)
+    elif no_browser_history:
+        print()
+        print("Browser history import skipped (--no-browser-history)")
+
+    if scan_ai_history_enabled() and not no_ai_history:
+        _import_ai_history_during_scan(db_path)
+    elif no_ai_history:
+        print()
+        print("AI history import skipped (--no-ai-history)")
+
     return 0
 
 
@@ -655,6 +769,11 @@ def build_parser() -> argparse.ArgumentParser:
     scan_parser.add_argument("--files-only", action="store_true", help="Only scan indexed files and folders.")
     scan_parser.add_argument("--no-browser-history", action="store_true", help="Skip browser history import for this scan.")
     scan_parser.add_argument("--no-ai-history", action="store_true", help="Skip configured AI history imports for this scan.")
+    quickscan_parser = subparsers.add_parser("quickscan", help="Scan only files changed since the previous scan.")
+    quickscan_parser.add_argument("--quiet", action="store_true", help="Suppress quickscan progress output.")
+    quickscan_parser.add_argument("--files-only", action="store_true", help="Only scan indexed files and folders.")
+    quickscan_parser.add_argument("--no-browser-history", action="store_true", help="Skip browser history import for this quickscan.")
+    quickscan_parser.add_argument("--no-ai-history", action="store_true", help="Skip configured AI history imports for this quickscan.")
     subparsers.add_parser("status", help="Show Ollama and dependency readiness.")
     subparsers.add_parser("info", help="Show index stats, storage, LLM config, and env vars.")
     browser_parser = subparsers.add_parser("browser-history", help="Import browser history as worklog events.")
@@ -718,7 +837,7 @@ def build_parser() -> argparse.ArgumentParser:
     worklog_parser.add_argument("--limit", type=int, default=50)
     worklog_parser.add_argument("--no-llm", action="store_true", help="Skip LLM synthesis; show raw activity only.")
     worklog_parser.add_argument("--include-private-time", action="store_true", help="Include activity outside configured work hours.")
-    worklog_parser.add_argument("--refresh", action="store_true", help="Run harumi scan before showing the worklog.")
+    worklog_parser.add_argument("--refresh", action="store_true", help="Run harumi quickscan before showing the worklog.")
 
     retrospect_parser = subparsers.add_parser("retrospect", help="Retrospect files and activity for a year, month, or day.")
     retrospect_parser.add_argument(
@@ -753,6 +872,13 @@ def main(argv: list[str] | None = None) -> int:
         return scan_command(
             args.progress_interval,
             args.progress_percent,
+            quiet=args.quiet,
+            files_only=args.files_only,
+            no_browser_history=args.no_browser_history,
+            no_ai_history=args.no_ai_history,
+        )
+    if args.command == "quickscan":
+        return quickscan_command(
             quiet=args.quiet,
             files_only=args.files_only,
             no_browser_history=args.no_browser_history,
@@ -812,7 +938,7 @@ def main(argv: list[str] | None = None) -> int:
         return list_roots_command()
     if args.command == "worklog":
         if args.refresh:
-            scan_exit = scan_command(600.0, None)
+            scan_exit = quickscan_command(quiet=True)
             if scan_exit != 0:
                 return scan_exit
         return worklog_command(

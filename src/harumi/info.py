@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from datetime import datetime
 
 from rich.console import Console
 from rich.rule import Rule
@@ -19,10 +20,11 @@ from harumi.config import (
     get_summary_min_chars,
     get_summary_model,
     summary_code_enabled,
+    summary_csv_enabled,
     summary_enabled,
     value_source,
 )
-from harumi.db import connect, count_index_stats, get_db_path, init_db
+from harumi.db import connect, count_index_stats, get_db_path, init_db, list_scan_state
 
 
 def _human_size(n: int) -> str:
@@ -52,6 +54,12 @@ def _pct(part: int, total: int) -> str:
 
 def _ok(v: bool) -> Text:
     return Text("enabled", style="green") if v else Text("disabled", style="dim yellow")
+
+
+def _format_epoch(value: float) -> str:
+    if value <= 0:
+        return "(never)"
+    return datetime.fromtimestamp(value).strftime("%Y-%m-%d %H:%M")
 
 
 def info_command() -> int:
@@ -92,6 +100,17 @@ def info_command() -> int:
     with connect(db_path) as conn:
         last_scan_row = conn.execute("SELECT MAX(last_scanned_at) AS ts FROM files").fetchone()
     last_scan = (last_scan_row["ts"] or "(never)") if last_scan_row else "(never)"
+    scan_state_rows = [row for row in list_scan_state(db_path) if row["enabled"]]
+    full_scan_times = [
+        float(row["last_full_started_at"])
+        for row in scan_state_rows
+        if float(row["last_full_started_at"] or 0) > 0
+    ]
+    quickscan_times = [
+        float(row["last_quick_started_at"])
+        for row in scan_state_rows
+        if float(row["last_quick_started_at"] or 0) > 0
+    ]
 
     files = stats["files"]
     t = Table(show_header=False, box=None, padding=(0, 2, 0, 0))
@@ -106,6 +125,8 @@ def info_command() -> int:
     t.add_row("Activity events", str(stats.get("activity_events", 0)), "")
     t.add_row("Activity sessions", str(stats.get("activity_sessions", 0)), "")
     t.add_row("Last scan", last_scan[:16], "")
+    t.add_row("Last full scan", _format_epoch(max(full_scan_times) if full_scan_times else 0), "")
+    t.add_row("Last quickscan", _format_epoch(max(quickscan_times) if quickscan_times else 0), "")
     console.print(t)
 
     # --- Storage ---
@@ -129,7 +150,17 @@ def info_command() -> int:
     t.add_column("model")
     t.add_column("status")
     t.add_column("note", style="dim")
-    t.add_row("Summary", get_summary_model(), _ok(summary_enabled()), f"lang={get_summary_language()}  min_chars={get_summary_min_chars()}  code={'yes' if summary_code_enabled() else 'no'}")
+    t.add_row(
+        "Summary",
+        get_summary_model(),
+        _ok(summary_enabled()),
+        (
+            f"lang={get_summary_language()}  "
+            f"min_chars={get_summary_min_chars()}  "
+            f"code={'yes' if summary_code_enabled() else 'no'}  "
+            f"csv={'yes' if summary_csv_enabled() else 'no'}"
+        ),
+    )
     t.add_row("Embedding", get_embed_model(), _ok(embedding_enabled()), "")
     console.print(t)
 

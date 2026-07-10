@@ -131,11 +131,57 @@ def _load_chatgpt_export(source_path: Path):
             try:
                 with archive.open("conversations.json") as handle:
                     return json.load(handle)
-            except KeyError as exc:
-                raise ValueError("ChatGPT export zip does not contain conversations.json.") from exc
+            except KeyError:
+                return _load_sharded_chatgpt_conversations(archive)
 
     with source_path.open("r", encoding="utf-8") as handle:
         return json.load(handle)
+
+
+def _load_sharded_chatgpt_conversations(archive: zipfile.ZipFile) -> list:
+    try:
+        with archive.open("export_manifest.json") as handle:
+            manifest = json.load(handle)
+    except KeyError as exc:
+        raise ValueError("ChatGPT export zip does not contain conversations.json.") from exc
+
+    files = _chatgpt_conversation_files_from_manifest(manifest)
+    if not files:
+        raise ValueError("ChatGPT export zip does not contain conversations.json.")
+
+    conversations: list = []
+    for filename in files:
+        try:
+            with archive.open(filename) as handle:
+                shard = json.load(handle)
+        except KeyError as exc:
+            raise ValueError(f"ChatGPT export zip is missing conversation shard: {filename}") from exc
+        if not isinstance(shard, list):
+            raise ValueError(f"ChatGPT export shard {filename} must contain a JSON array.")
+        conversations.extend(shard)
+    return conversations
+
+
+def _chatgpt_conversation_files_from_manifest(manifest: object) -> list[str]:
+    if not isinstance(manifest, dict):
+        return []
+
+    logical_files = manifest.get("logical_files")
+    if isinstance(logical_files, dict):
+        resources = logical_files
+    else:
+        resources = manifest.get("resources")
+        if not isinstance(resources, dict):
+            resources = manifest
+
+    conversations = resources.get("conversations.json")
+    if not isinstance(conversations, dict):
+        return []
+
+    files = conversations.get("files")
+    if not isinstance(files, list):
+        return []
+    return [filename for filename in files if isinstance(filename, str)]
 
 
 def read_claude_conversations(source_path: Path) -> list[AiConversation]:

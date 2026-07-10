@@ -5,7 +5,7 @@ Harumi は、ローカル PC 上のファイルを索引化し、要約と埋め
 現在の主な機能:
 
 - ルートディレクトリ管理
-- 再帰スキャン
+- 再帰スキャンと高速 quickscan
 - テキスト/コードの直接読込
 - MarkItDown による文書正規化
 - Ollama によるローカル要約
@@ -22,6 +22,7 @@ scripts/install.sh
 harumi init
 harumi roots add ~/Documents
 harumi scan
+harumi quickscan
 harumi find "最近の旅行書類"
 ```
 
@@ -101,7 +102,17 @@ harumi roots add ~/Documents
 harumi roots list
 ```
 
-ルートをスキャンし、設定済み activity import も更新:
+通常の高速更新:
+
+```bash
+harumi quickscan
+harumi quickscan --quiet
+harumi quickscan --files-only
+harumi quickscan --no-browser-history
+harumi quickscan --no-ai-history
+```
+
+初回や `.harumiignore` 変更後など、全体を見直したいときの full scan:
 
 ```bash
 harumi scan
@@ -166,7 +177,7 @@ harumi regenerate-summaries --scope all --execute --confirm RESET-SUMMARIES
 
 ## Activity 取り込みと作業記録
 
-Harumi はブラウザ履歴と生成 AI のエクスポートをローカル activity として取り込めます。`harumi scan` は既定でブラウザ履歴と設定済み AI export を更新します。1 回だけ外したい場合は `--files-only`、`--no-browser-history`、`--no-ai-history` を使います。
+Harumi はブラウザ履歴と生成 AI のエクスポートをローカル activity として取り込めます。`harumi quickscan` / `harumi scan` は既定でブラウザ履歴と設定済み AI export を更新します。1 回だけ外したい場合は `--files-only`、`--no-browser-history`、`--no-ai-history` を使います。
 
 手動取り込みコマンドは既定で dry-run で、DB に書き込むには明示的な確認トークンが必要です。
 
@@ -196,9 +207,9 @@ harumi ai-history import ~/Downloads/gemini-takeout.zip --provider gemini --sinc
 
 - `chatgpt`: OpenAI のデータエクスポート zip または `conversations.json`
 - `claude`: `conversations.json` を含む Claude エクスポート zip
-- `gemini`: Google Takeout の Gemini activity HTML zip
+- `gemini`: Google Takeout の マイアクティビティをエクスポート HTML zip
 
-`harumi scan` で AI 履歴も更新するには、export path を設定します。
+`harumi quickscan` / `harumi scan` で AI 履歴も更新するには、export path を設定します。
 
 ```bash
 harumi config set ai_history_chatgpt_path ~/Downloads/chatgpt-export.zip
@@ -253,6 +264,8 @@ harumi worklog --include-private-time
   - 要約対象にする最小文字数。既定値は `400`
 - `HARUMI_SUMMARY_CODE`
   - `1` にするとコードや設定ファイルも要約する
+- `HARUMI_SUMMARY_CSV`
+  - `1` にすると CSV も要約する。既定では CSV は正規化・検索対象に残し、要約だけ作らない
 - `HARUMI_ENABLE_EMBEDDING`
   - `0` にすると embedding 生成を無効化
 - `HARUMI_FOLDER_SUMMARY_MIN_ITEMS`
@@ -264,17 +277,17 @@ harumi worklog --include-private-time
 - `HARUMI_WORK_DAYS`
   - worklog 対象曜日。既定値は `mon,tue,wed,thu,fri`
 - `HARUMI_SCAN_BROWSER_HISTORY`
-  - `0` にすると `harumi scan` でブラウザ履歴を取り込まない
+  - `0` にすると `harumi quickscan` / `harumi scan` でブラウザ履歴を取り込まない
 - `HARUMI_SCAN_BROWSER_HISTORY_LAST`
-  - `harumi scan` が使うブラウザ履歴の範囲。既定値は `7d`
+  - `harumi quickscan` / `harumi scan` が使うブラウザ履歴の範囲。既定値は `7d`
 - `HARUMI_SCAN_AI_HISTORY`
-  - `0` にすると `harumi scan` で設定済み AI export を取り込まない
+  - `0` にすると `harumi quickscan` / `harumi scan` で設定済み AI export を取り込まない
 - `HARUMI_AI_HISTORY_CHATGPT_PATH`
-  - `harumi scan` が使う ChatGPT export path
+  - `harumi quickscan` / `harumi scan` が使う ChatGPT export path
 - `HARUMI_AI_HISTORY_CLAUDE_PATH`
-  - `harumi scan` が使う Claude export path
+  - `harumi quickscan` / `harumi scan` が使う Claude export path
 - `HARUMI_AI_HISTORY_GEMINI_PATH`
-  - `harumi scan` が使う Gemini export path
+  - `harumi quickscan` / `harumi scan` が使う Gemini export path
 
 例:
 
@@ -285,7 +298,7 @@ HARUMI_EMBED_MODEL=embeddinggemma \
 harumi scan
 ```
 
-大規模スキャンを少し軽くするため、Harumi は既定で短すぎる文書の要約を省き、コードファイルは `HARUMI_SUMMARY_CODE=1` を指定したときだけ要約します。
+大規模スキャンを少し軽くするため、Harumi は既定で短すぎる文書の要約を省き、コードファイルは `HARUMI_SUMMARY_CODE=1`、CSV は `HARUMI_SUMMARY_CSV=1` を指定したときだけ要約します。
 
 ## メモ
 

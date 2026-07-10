@@ -45,6 +45,37 @@ class AiHistoryTests(unittest.TestCase):
             self.assertEqual(len(conversations), 1)
             self.assertEqual(conversations[0].assistant_messages, ("AWS SSO は Identity Center で設定します。",))
 
+    def test_read_chatgpt_conversations_from_sharded_export_zip(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            source = Path(tmpdir) / "chatgpt-export.zip"
+            with zipfile.ZipFile(source, "w") as archive:
+                archive.writestr(
+                    "export_manifest.json",
+                    json.dumps(
+                        {
+                            "resources": {
+                                "conversations.json": {
+                                    "files": ["conversations-000.json", "conversations-001.json"],
+                                    "sharded": True,
+                                }
+                            },
+                            "logical_files": {
+                                "conversations.json": {
+                                    "files": ["conversations-000.json", "conversations-001.json"],
+                                    "sharded": True,
+                                }
+                            },
+                        }
+                    ),
+                )
+                archive.writestr("conversations-000.json", json.dumps([_chatgpt_conversation()]))
+                archive.writestr("conversations-001.json", json.dumps([_chatgpt_conversation(conversation_id="conv-2")]))
+
+            conversations = read_chatgpt_conversations(source)
+
+            self.assertEqual(len(conversations), 2)
+            self.assertEqual([conversation.conversation_id for conversation in conversations], ["conv-1", "conv-2"])
+
     def test_import_chatgpt_history_stores_activity_event_and_session(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)
@@ -128,9 +159,9 @@ class AiHistoryTests(unittest.TestCase):
             self.assertEqual(sessions[0]["primary_domain"], "claude")
 
 
-def _chatgpt_conversation() -> dict:
+def _chatgpt_conversation(conversation_id: str = "conv-1") -> dict:
     return {
-        "id": "conv-1",
+        "id": conversation_id,
         "title": "AWS SSO",
         "create_time": 1775001600.0,
         "update_time": 1775001900.0,

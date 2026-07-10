@@ -7,9 +7,13 @@
 
 `harumi init`
 
-- Register a directory and scan files plus configured activity imports:
+- Register a directory and run the initial full scan:
 
 `harumi roots add {{~/Documents}} && harumi scan`
+
+- Refresh changed files plus configured activity imports:
+
+`harumi quickscan`
 
 - Scan only files and folders:
 

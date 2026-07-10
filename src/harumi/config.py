@@ -12,6 +12,7 @@ SUMMARY_MODEL_ENV = "HARUMI_SUMMARY_MODEL"
 SUMMARY_ENABLED_ENV = "HARUMI_ENABLE_SUMMARY"
 SUMMARY_MIN_CHARS_ENV = "HARUMI_SUMMARY_MIN_CHARS"
 SUMMARY_CODE_ENABLED_ENV = "HARUMI_SUMMARY_CODE"
+SUMMARY_CSV_ENABLED_ENV = "HARUMI_SUMMARY_CSV"
 FOLDER_SUMMARY_MIN_ITEMS_ENV = "HARUMI_FOLDER_SUMMARY_MIN_ITEMS"
 SUMMARY_LANGUAGE_ENV = "HARUMI_SUMMARY_LANGUAGE"
 EMBED_MODEL_ENV = "HARUMI_EMBED_MODEL"
@@ -36,6 +37,7 @@ CONFIG_SCHEMA: dict[str, tuple[str, type, object, str]] = {
     "embedding_enabled":      (EMBED_ENABLED_ENV,           bool, True,            "Enable embedding generation"),
     "summary_min_chars":      (SUMMARY_MIN_CHARS_ENV,       int,  400,             "Minimum chars before summarizing"),
     "summary_code":           (SUMMARY_CODE_ENABLED_ENV,    bool, False,           "Summarize code files"),
+    "summary_csv":            (SUMMARY_CSV_ENABLED_ENV,     bool, False,           "Summarize CSV files"),
     "folder_summary_min_items": (FOLDER_SUMMARY_MIN_ITEMS_ENV, int, 2,            "Min child items to summarize a folder"),
     "work_hours_start":       (WORK_HOURS_START_ENV,        str,  "09:00",         "Start of work hours for worklog filtering"),
     "work_hours_end":         (WORK_HOURS_END_ENV,          str,  "18:00",         "End of work hours for worklog filtering"),
@@ -164,6 +166,10 @@ def get_summary_min_chars() -> int:
 
 def summary_code_enabled() -> bool:
     return bool(_get_value("summary_code"))
+
+
+def summary_csv_enabled() -> bool:
+    return bool(_get_value("summary_csv"))
 
 
 def get_folder_summary_min_items() -> int:

@@ -7,7 +7,7 @@ HARUMI stands for `Hierarchical Assistant for Retrieval, Understanding, Metadata
 Current status:
 
 - root directory management
-- recursive file scanning
+- recursive full scans and fast quickscans
 - text/code normalization
 - document normalization through MarkItDown
 - local summaries through Ollama
@@ -24,6 +24,7 @@ scripts/install.sh
 harumi init
 harumi roots add ~/Documents
 harumi scan
+harumi quickscan
 harumi find "recent travel document"
 ```
 
@@ -102,7 +103,17 @@ List registered roots:
 harumi roots list
 ```
 
-Scan roots and refresh configured activity imports:
+Refresh changed files quickly:
+
+```bash
+harumi quickscan
+harumi quickscan --quiet
+harumi quickscan --files-only
+harumi quickscan --no-browser-history
+harumi quickscan --no-ai-history
+```
+
+Run a full scan when initializing roots or after changing `.harumiignore`:
 
 ```bash
 harumi scan
@@ -167,7 +178,7 @@ harumi regenerate-summaries --scope all --execute --confirm RESET-SUMMARIES
 
 ## Activity imports and work logs
 
-Harumi can import browser history and AI assistant exports as local activity. `harumi scan` refreshes browser history and configured AI exports by default. Use `--files-only`, `--no-browser-history`, or `--no-ai-history` to opt out for a single scan.
+Harumi can import browser history and AI assistant exports as local activity. `harumi quickscan` and `harumi scan` refresh browser history and configured AI exports by default. Use `--files-only`, `--no-browser-history`, or `--no-ai-history` to opt out for a single scan.
 
 Manual import commands are dry-run by default and require an explicit confirmation token before writing to the database.
 
@@ -199,7 +210,7 @@ Supported AI providers:
 - `claude`: Claude export zip containing `conversations.json`
 - `gemini`: Google Takeout Gemini activity HTML zip
 
-To make `harumi scan` refresh AI history, configure export paths:
+To make `harumi quickscan` and `harumi scan` refresh AI history, configure export paths:
 
 ```bash
 harumi config set ai_history_chatgpt_path ~/Downloads/chatgpt-export.zip
@@ -256,6 +267,8 @@ Harumi uses these environment variables when needed:
   - minimum normalized text length to summarize, default `400`
 - `HARUMI_SUMMARY_CODE`
   - set to `1` to summarize code and config files too
+- `HARUMI_SUMMARY_CSV`
+  - set to `1` to summarize CSV files. By default CSV files are normalized and searchable, but summaries are skipped
 - `HARUMI_ENABLE_EMBEDDING`
   - set to `0` to disable embedding generation
 - `HARUMI_FOLDER_SUMMARY_MIN_ITEMS`
@@ -267,17 +280,17 @@ Harumi uses these environment variables when needed:
 - `HARUMI_WORK_DAYS`
   - comma-separated work days, default `mon,tue,wed,thu,fri`
 - `HARUMI_SCAN_BROWSER_HISTORY`
-  - set to `0` to stop `harumi scan` from importing browser history
+  - set to `0` to stop `harumi quickscan` and `harumi scan` from importing browser history
 - `HARUMI_SCAN_BROWSER_HISTORY_LAST`
-  - browser history range used by `harumi scan`, default `7d`
+  - browser history range used by `harumi quickscan` and `harumi scan`, default `7d`
 - `HARUMI_SCAN_AI_HISTORY`
-  - set to `0` to stop `harumi scan` from importing configured AI exports
+  - set to `0` to stop `harumi quickscan` and `harumi scan` from importing configured AI exports
 - `HARUMI_AI_HISTORY_CHATGPT_PATH`
-  - ChatGPT export path used by `harumi scan`
+  - ChatGPT export path used by `harumi quickscan` and `harumi scan`
 - `HARUMI_AI_HISTORY_CLAUDE_PATH`
-  - Claude export path used by `harumi scan`
+  - Claude export path used by `harumi quickscan` and `harumi scan`
 - `HARUMI_AI_HISTORY_GEMINI_PATH`
-  - Gemini export path used by `harumi scan`
+  - Gemini export path used by `harumi quickscan` and `harumi scan`
 
 Example:
 
@@ -288,7 +301,7 @@ HARUMI_EMBED_MODEL=embeddinggemma \
 harumi scan
 ```
 
-To keep large scans faster, Harumi skips summaries for very short files by default, and it does not summarize code files unless `HARUMI_SUMMARY_CODE=1` is set.
+To keep large scans faster, Harumi skips summaries for very short files by default. It does not summarize code files unless `HARUMI_SUMMARY_CODE=1` is set, and it does not summarize CSV files unless `HARUMI_SUMMARY_CSV=1` is set.
 
 ## Notes
 

@@ -10,6 +10,7 @@ from harumi.config import (
     get_summary_min_chars,
     get_summary_model,
     summary_code_enabled,
+    summary_csv_enabled,
 )
 
 
@@ -40,6 +41,9 @@ CODE_EXTENSIONS = {
     ".css",
     ".scss",
     ".sql",
+}
+CSV_EXTENSIONS = {
+    ".csv",
 }
 
 
@@ -115,11 +119,14 @@ def summarize_folder(path: str, child_descriptions: str) -> tuple[str, str]:
 def should_summarize_text(path: str, normalized_text: str, normalized_format: str) -> bool:
     if len(normalized_text.strip()) < get_summary_min_chars():
         return False
+    suffix = Path(path).suffix.lower()
+    if suffix in CSV_EXTENSIONS and not summary_csv_enabled():
+        return False
     if normalized_format == "markdown":
         return True
     if summary_code_enabled():
         return True
-    return Path(path).suffix.lower() not in CODE_EXTENSIONS
+    return suffix not in CODE_EXTENSIONS
 
 
 def should_summarize_folder(child_descriptions: str) -> bool:

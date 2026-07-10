@@ -75,6 +75,52 @@ class SummarizePolicyTests(unittest.TestCase):
             else:
                 os.environ["HARUMI_SUMMARY_CODE"] = old_code
 
+    def test_csv_file_is_skipped_by_default(self) -> None:
+        old_min = os.environ.get("HARUMI_SUMMARY_MIN_CHARS")
+        old_csv = os.environ.get("HARUMI_SUMMARY_CSV")
+        os.environ["HARUMI_SUMMARY_MIN_CHARS"] = "10"
+        os.environ.pop("HARUMI_SUMMARY_CSV", None)
+        try:
+            self.assertFalse(
+                should_summarize_text(
+                    "/tmp/accounts.csv",
+                    "| date | amount |\n| --- | --- |\n| 2026-01-01 | 1000 |",
+                    "markdown",
+                )
+            )
+        finally:
+            if old_min is None:
+                os.environ.pop("HARUMI_SUMMARY_MIN_CHARS", None)
+            else:
+                os.environ["HARUMI_SUMMARY_MIN_CHARS"] = old_min
+            if old_csv is None:
+                os.environ.pop("HARUMI_SUMMARY_CSV", None)
+            else:
+                os.environ["HARUMI_SUMMARY_CSV"] = old_csv
+
+    def test_csv_file_can_be_enabled(self) -> None:
+        old_min = os.environ.get("HARUMI_SUMMARY_MIN_CHARS")
+        old_csv = os.environ.get("HARUMI_SUMMARY_CSV")
+        os.environ["HARUMI_SUMMARY_MIN_CHARS"] = "10"
+        os.environ["HARUMI_SUMMARY_CSV"] = "1"
+        try:
+            self.assertTrue(
+                should_summarize_text(
+                    "/tmp/accounts.csv",
+                    "| date | amount |\n| --- | --- |\n| 2026-01-01 | 1000 |",
+                    "markdown",
+                )
+            )
+        finally:
+            if old_min is None:
+                os.environ.pop("HARUMI_SUMMARY_MIN_CHARS", None)
+            else:
+                os.environ["HARUMI_SUMMARY_MIN_CHARS"] = old_min
+            if old_csv is None:
+                os.environ.pop("HARUMI_SUMMARY_CSV", None)
+            else:
+                os.environ["HARUMI_SUMMARY_CSV"] = old_csv
+
     def test_folder_summary_requires_multiple_children_by_default(self) -> None:
         self.assertFalse(should_summarize_folder("file: note.txt (.txt)"))
         self.assertTrue(
